@@ -1,0 +1,52 @@
+name: Scrape (v2-ingestion)
+
+# Reused v1 scraper engine (lib/scrapers + lib/ai/rules + lib/tagging + lib/v3
+# enrichment), run independently on GitHub Actions. INITIALLY workflow_dispatch
+# ONLY — test via manual dispatch; dedup by url_hash makes it safe to run
+# alongside v1's scrape.yml. AT CUTOVER: uncomment `schedule` below AND disable
+# v1's scrape.yml — only ONE scheduled scraper at a time (two would roughly
+# double the Supabase-Nano Disk-IO load, the dominant consumer and the reason
+# the cron is 3h not 2h). The Ç1 CF watchdog (maritime-reader-admin) should also
+# be pointed at this workflow at cutover.
+
+on:
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Force scrape all enabled sources (ignore due interval)'
+        required: false
+        default: false
+        type: boolean
+  # schedule:
+  #   - cron: '23 */3 * * *'   # ENABLE AT CUTOVER (and disable v1 scrape.yml)
+
+concurrency:
+  group: scrape-v2-ingestion
+  cancel-in-progress: false
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+      - run: npm ci
+      - name: Install Playwright Chromium (for requires_js sources)
+        run: npx playwright install --with-deps chromium
+      - name: Run scraper
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          # Optional: AI summary/categorize. Falls back to rules if absent.
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Optional: best-effort stuck-scrape email (no-op if unset).
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          RESEND_FROM_ADDRESS: ${{ secrets.RESEND_FROM_ADDRESS }}
+          ALERT_EMAIL: ${{ secrets.ALERT_EMAIL }}
+          SCRAPE_FORCE: ${{ inputs.force && '1' || '' }}
+          SCRAPE_RUNNER: cloud
+        run: npx tsx scripts/cron-scrape.ts

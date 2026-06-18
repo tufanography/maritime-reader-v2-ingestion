@@ -1,0 +1,31 @@
+{
+  "name": "maritime-reader-v2-ingestion",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Independent ingestion pipeline for Maritime Reader v2. Reuses v1's (maritime-pulse) proven scraper engine (lib/scrapers + lib/ai/rules + lib/tagging + lib/v3 enrichment), run standalone on GitHub Actions (public repo) and watched by the Ç1 CF cron watchdog. Writes to the same Supabase DB the v2 static site reads. Kept separate from the site repo so site builds stay free of Crawlee/Playwright deps.",
+  "scripts": {
+    "build": "tsc --noEmit",
+    "scrape": "tsx scripts/cron-scrape.ts",
+    "dryrun": "tsx src/cli/dryrun.ts",
+    "apply": "tsx src/cli/apply.ts",
+    "verify": "tsx src/cli/verify.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.92.0",
+    "@supabase/supabase-js": "^2.105.1",
+    "cheerio": "^1.2.0",
+    "chrono-node": "^2.7.7",
+    "dotenv": "^16.4.5",
+    "pdf-parse": "^1.1.1",
+    "playwright": "^1.60.0",
+    "resend": "^6.12.2",
+    "rss-parser": "^3.13.0",
+    "unpdf": "^1.6.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.7.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}
