@@ -1,0 +1,36 @@
+# Daily COVERAGE AUDIT — visits the top news + P&I sources and answers two
+# questions the scrape pipeline alone can't: (1) did a source go silent / break
+# (its production `articles_found` collapsed or it errored)? (2) is the source
+# publishing content we EXTRACT but don't capture (rejected by the quality/date
+# gate, or a new URL pattern)? Posts/updates ONE GitHub Issue (coverage-audit
+# label) when anything is flagged, closes it when all clear. $0 — public repo =
+# unlimited Actions; reuses the real fetchRaw so there are no re-implementation
+# false alarms. Read-only against the DB + sources.
+name: coverage-audit
+on:
+  schedule:
+    - cron: '40 6 * * *'   # daily 06:40 UTC (off-peak; after the overnight scrapes settle)
+  workflow_dispatch: {}
+permissions:
+  contents: read
+  issues: write            # GITHUB_TOKEN opens/edits/closes the audit issue
+concurrency:
+  group: coverage-audit
+  cancel-in-progress: false
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45    # fetchRaw does real per-source fetches (some sources are slow)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+      - run: npm ci
+      - name: Run coverage audit
+        run: npx tsx scripts/audit-coverage.ts
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

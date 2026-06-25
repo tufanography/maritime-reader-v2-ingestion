@@ -52,7 +52,11 @@ function selectActiveConfig(source: Source): HtmlScraperConfig {
   return { ...config, jobs: active, list_url: undefined, sitemap_url: undefined };
 }
 
-async function fetchRaw(source: Source): Promise<RawArticle[]> {
+// Exported so the daily coverage audit (scripts/audit-coverage.ts) can reuse the
+// EXACT production extraction (rss / html / sitemap / job_groups / requires_js)
+// rather than re-implementing it — a re-implementation diverged and false-flagged
+// healthy sitemap/RSS sources (Gard) as broken. Read-only; no insert side effects.
+export async function fetchRaw(source: Source): Promise<RawArticle[]> {
   if (source.type === 'rss') {
     if (!source.feed_url) throw new Error('rss source missing feed_url');
     const rssOpts = (source.scraper_config ?? {}) as { skip_og_image?: boolean };
