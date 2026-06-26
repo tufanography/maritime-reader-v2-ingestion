@@ -131,6 +131,16 @@ const SEGMENT_RULES: SegmentRule[] = [
       /\bcoal\s+(shipment|cargo|trade|carrier)\b/i,
       /\bgrain\s+(shipment|cargo|export|trade)\b/i,
       /\bbauxite\s+cargo\b/i,
+      // Solid-bulk cargoes that recur in P&I loss-prevention (the IMSBC "Group A"
+      // liquefaction family). These were missed: "nickel ore cargoes",
+      // "cargo liquefaction", "Group A cargo" are unambiguously dry-bulk.
+      // NOTE: bare "liquefaction" is NOT added — "LNG liquefaction" is lng_lpg.
+      /\b(nickel|manganese|chrome|chromium|fluorspar|bauxite)\s+ore\b/i,
+      /\bore\s+(cargo|cargoes)\b/i,
+      /\bcargo\s+liquefaction\b/i,
+      /\bmay\s+liquefy\b/i,
+      /\bgroup\s+a\s+cargo(es)?\b/i,
+      /\bsolid\s+bulk\s+cargo(es)?\b/i,
       /\b(BDI|BCI|BPI|BSI|BHSI)\b/,                  // Baltic Dry/Capesize/Panamax/Supramax/Handysize
       /\bBaltic\s+(Dry|Capesize|Panamax|Supramax|Handysize)\s+Index\b/i,
       // Major dry-bulk operators
