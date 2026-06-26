@@ -219,9 +219,16 @@ export function deriveSegments(args: {
     found.add(CATEGORY_TO_SEGMENT[categorySlug]);
   }
 
-  // 3. Keyword scan over title + excerpt (title carries more weight implicitly
-  //    because it tends to be more specific; we don't need a score here)
-  const text = `${title}\n${excerpt.slice(0, 1500)}`;
+  // 3. Keyword scan over title + the LEDE (first ~400 chars), not the whole body.
+  //    DIAGNOSIS 2026-06-27: scanning 1500c over-tagged sanctions/regulation
+  //    articles — e.g. an EU-sanctions circular lists "LNG tankers" / "tankers"
+  //    deep in the body (char 650-1232) as the *regulated* vessels, firing false
+  //    tanker/lng_lpg. The article's actual subject is stated in the lede, so a
+  //    body match there (Hantavirus→"cruise ship", "LNG import ban") is real
+  //    while a deep passing mention is not. Title still counts fully (it's short
+  //    and topical). 400c ≈ 2-3 sentences — cleanly separates the legit lede
+  //    matches (≤250c observed) from the passing deep ones (≥650c observed).
+  const text = `${title}\n${excerpt.slice(0, 400)}`;
   for (const rule of SEGMENT_RULES) {
     if (rule.patterns.some((p) => p.test(text))) {
       found.add(rule.segment);
