@@ -209,7 +209,12 @@ export async function scrapeSource(source: Source): Promise<ScrapeResult> {
       // scraper_default rows are real articles before wiring the site side.
       const useFallback = (source.scraper_config as { date_fallback?: boolean } | null)?.date_fallback === true;
       if (useFallback) {
-        const fb = resolveFallbackDate(`${raw.title}\n${raw.excerpt ?? ''}`, new Date().toISOString());
+        // TITLE ONLY for the month-year scan, NOT the body: circular/press-release
+        // bodies routinely CITE other dates ("the Jan 2020 MARPOL amendments…",
+        // "following the May 2021 incident") and YouTube excerpts leak unrelated
+        // article titles — the first-match would back-date a brand-new item by
+        // years. The title is the publish context and rarely cites a foreign date.
+        const fb = resolveFallbackDate(raw.title ?? '', new Date().toISOString());
         raw.published_at = fb.iso;
         raw.published_at_source = 'scraper_default';
         raw.published_at_confidence = 'low';

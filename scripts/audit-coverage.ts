@@ -69,15 +69,18 @@ export async function runAudit(topNames: string[]) {
     // for STALE_DAYS — that's the difference between "all caught up" and "dark".
     // (Measured 2026-06-26: UK P&I/Swedish showed found=0 but had 4/11 fresh DB
     // rows in the last week → healthy; London/American had 0 → genuinely dark.)
-    const logs = await jget(`scrape_logs?select=status,articles_found,articles_new&source_id=eq.${src.id}&order=started_at.desc&limit=20`);
+    const logs = await jget(`scrape_logs?select=status,articles_found,articles_new,error_message&source_id=eq.${src.id}&order=started_at.desc&limit=20`);
     const founds = logs.map((l: any) => l.articles_found ?? 0);
     const foundSum = founds.reduce((a: number, b: number) => a + b, 0);
     const newSum = logs.reduce((a: number, l: any) => a + (l.articles_new ?? 0), 0);
-    // CHRONIC_REJECTION: finds plenty but inserts ~nothing over the window → its
-    // content is rejected every run (dateless circulars, login walls, quality).
-    // Systemic signal — catches EVERY such source, not just hand-picked ones
-    // (measured 2026-06-26: 14 sources incl. Japan P&I 1535-found/0-new + 6 YT).
-    const chronicReject = foundSum >= 20 && newSum <= 2;
+    // CHRONIC_REJECTION: finds plenty but inserts ~nothing AND the runs explicitly
+    // report rejections. The rejRuns gate is essential — `articles_found` re-counts
+    // already-known URLs every run (RSS feed size, stop_on_known re-lists), so a
+    // healthy fully-caught-up source in a quiet window also has high foundSum + low
+    // newSum. Only a source whose logs say "N rejected by quality filter" is truly
+    // rejecting (Gard/Steamship/Japan), not just caught up.
+    const rejRuns = logs.filter((l: any) => /reject/i.test(l.error_message || '')).length;
+    const chronicReject = foundSum >= 20 && newSum <= 2 && rejRuns >= 3;
     const med = median(founds);
     const latest2 = founds.slice(0, 2);
     const newestRow = await jget(`articles?select=created_at&source_id=eq.${src.id}&order=created_at.desc&limit=1`);
@@ -107,7 +110,12 @@ export async function runAudit(topNames: string[]) {
         const rows = await jget(`articles?select=url_hash&source_id=eq.${src.id}&url_hash=in.(${chunk.join(',')})`);
         for (const r of rows) inDb.add(r.url_hash);
       }
-      uncaptured = extracted.filter((_, i) => !inDb.has(hashes[i])).map((r) => ({ title: (r.title || '').slice(0, 60), url: r.url }));
+      // Dedup by url so a list page that links the same item twice (or an rss
+      // branch with dupes) doesn't double-count one missing item toward UNCAPTURED_WARN.
+      const seenU = new Set<string>();
+      uncaptured = extracted
+        .filter((r, i) => !inDb.has(hashes[i]) && !seenU.has(r.url) && (seenU.add(r.url), true))
+        .map((r) => ({ title: (r.title || '').slice(0, 60), url: r.url }));
     } catch (e: any) { covErr = (e?.message || String(e)).slice(0, 120); }
 
     const flags: string[] = [];
@@ -146,6 +154,11 @@ async function checkSiteFreshness(): Promise<{ name: string; flags: string[]; no
       const lagH = (dbNewest - siteNewest) / 3_600_000;
       notes.push(`feed lag ${lagH.toFixed(1)}h (site ${m![1].slice(0, 16)} vs DB ${dbRows[0].published_at.slice(0, 16)})`);
       if (lagH > FEED_STALE_HOURS) flags.push('FEED_STALE');
+    } else if (Number.isNaN(siteNewest) && !Number.isNaN(dbNewest)) {
+      // Homepage rendered NO <time> (empty/garbled feed) while the DB HAS content —
+      // the worst failure mode. Must ALARM, not stay a silent note.
+      flags.push('FEED_STALE');
+      notes.push('feed: NO dated article on homepage but DB has content (empty/broken build?)');
     } else notes.push('feed freshness: could not read site/DB newest');
   } catch (e: any) { notes.push('feed check error: ' + (e?.message || e).slice(0, 60)); }
   // BASE_STALE — last successful deploy-base age (needs cross-repo token)
