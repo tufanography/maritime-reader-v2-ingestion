@@ -37,3 +37,9 @@ jobs:
           # Cross-repo read for BASE_STALE (deploy-base age on maritime-reader-v2).
           # Optional: if unset, the freshness check skips base-age and notes it.
           V2_DISPATCH_TOKEN: ${{ secrets.V2_DISPATCH_TOKEN }}
+          # Transition-only alarm email (sent on CRITICAL 0↔N only; persisting
+          # state + the standing chronic/gap baseline stay silent). If unset, the
+          # audit still posts the GitHub issue — email is just skipped.
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          ALERT_EMAIL: ${{ secrets.ALERT_EMAIL }}
+          RESEND_FROM_ADDRESS: ${{ secrets.RESEND_FROM_ADDRESS }}

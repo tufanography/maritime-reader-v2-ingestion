@@ -197,8 +197,39 @@ function buildBody(report: any[]): string {
     b += `- **${r.name}** — ${r.uncaptured} of ${r.extracted} extracted items are NOT captured (rejected by quality/date gate or new URL pattern):\n`;
     for (const s of (r.sample || [])) b += `    - ${s.title} — ${s.url}\n`;
   }
-  b += `\nNote: multi-job sources (Steamship/West/etc.) rotate one job-group per run, so a single audit samples one group; coverage flags clear/appear across the rotation. <!-- coverage-audit -->`;
+  // crit-state marker: lets the NEXT run read how many CRITICAL signals the LAST
+  // write recorded, so email fires only on the 0→N (new break) and N→0 (cleared)
+  // transitions — never on a persisting state (silent body-edit). This closes the
+  // gap source-health has, where a critical that appears on a PATCH run is silent.
+  b += `\nNote: multi-job sources (Steamship/West/etc.) rotate one job-group per run, so a single audit samples one group; coverage flags clear/appear across the rotation. <!-- coverage-audit --><!-- crit-state:${crit.length} -->`;
   return b;
+}
+
+// Scoped alarm email (Resend, direct API — GHA-safe). Mirrors source-health's
+// proven transition-only design: sent ONLY when CRITICAL count crosses 0↔N, never
+// on a persisting state, so the standing chronic/coverage-gap baseline (known: ~4
+// dark P&I, ~14 chronic) does NOT flood the inbox — those live in the issue only.
+async function sendEmail(subject: string, html: string): Promise<void> {
+  const key = process.env.RESEND_API_KEY;
+  const to = process.env.ALERT_EMAIL;
+  const from = process.env.RESEND_FROM_ADDRESS || 'Maritime Reader <onboarding@resend.dev>';
+  if (!key || !to) { console.log('  (no RESEND_API_KEY/ALERT_EMAIL → email skipped)'); return; }
+  try {
+    const res = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ from, to, subject, html }),
+    });
+    console.log(res.ok ? '  ✉️  alert email sent' : `  email FAILED ${res.status}: ${await res.text()}`);
+  } catch (e: any) { console.log('  email FAILED', e.message); }
+}
+
+function critHtml(crit: any[]): string {
+  return `<p><strong>Maritime Reader — coverage audit</strong></p>` +
+    `<p>${crit.length} source/site issue(s) need attention:</p>` +
+    `<ul style="font-family:ui-monospace,monospace;font-size:13px">` +
+    crit.map((r) => `<li><strong>${r.name}</strong> [${(r.flags || []).join(', ')}] — ${r.note ?? `found median ${r.foundMedian}, nothing captured in ${r.daysSinceCapture} day(s)`}</li>`).join('') +
+    `</ul><p style="color:#666;font-size:12px">Full detail (chronic rejections + coverage gaps) is in the GitHub coverage-audit issue. ${new Date().toISOString()}</p>`;
 }
 
 async function postIssue(report: any[]) {
@@ -208,15 +239,37 @@ async function postIssue(report: any[]) {
   const gh = (path: string, init?: any) => fetch(`https://api.github.com/repos/${repo}/${path}`, { ...init, headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json', 'Content-Type': 'application/json', 'User-Agent': 'coverage-audit' } });
   const existing = await (await gh(`issues?state=open&labels=coverage-audit`)).json();
   const open = Array.isArray(existing) ? existing[0] : null;
-  const critCount = report.filter((r) => (r.flags || []).some((f: string) => CRITICAL.has(f))).length;
+  const critRows = report.filter((r) => (r.flags || []).some((f: string) => CRITICAL.has(f)));
+  const critCount = critRows.length;
+  // Prior CRITICAL count, read from the marker the LAST write embedded. Email is
+  // gated on this so it fires only on transitions, never on a persisting state.
+  const priorMatch = (open?.body || '').match(/<!-- crit-state:(\d+) -->/);
+  const priorCrit = priorMatch ? +priorMatch[1] : 0;
+
   if (!flagged.length) {
-    if (open) { await gh(`issues/${open.number}`, { method: 'PATCH', body: JSON.stringify({ state: 'closed' }) }); console.log(`closed audit issue #${open.number} (all clear)`); }
+    if (open) {
+      await gh(`issues/${open.number}`, { method: 'PATCH', body: JSON.stringify({ state: 'closed' }) });
+      console.log(`closed audit issue #${open.number} (all clear)`);
+      // Email on resolve ONLY if the issue we just closed had CRITICAL signals —
+      // a gaps-only issue closing is routine and stays silent.
+      if (priorCrit > 0) await sendEmail('✅ Maritime Reader: coverage audit clear', '<p>All previously-flagged source/site issues have cleared — the coverage audit is green again.</p>');
+    }
     return;
   }
   const title = `🔎 Coverage audit — ${critCount} broken, ${flagged.length - critCount} coverage gap(s)`;
   const body = buildBody(report);
   if (open) { await gh(`issues/${open.number}`, { method: 'PATCH', body: JSON.stringify({ title, body, state: 'open' }) }); console.log(`updated audit issue #${open.number}`); }
   else { const r = await (await gh(`issues`, { method: 'POST', body: JSON.stringify({ title, body, labels: ['coverage-audit'] }) })).json(); console.log(`opened audit issue #${r.number}`); }
+
+  // Transition email — CRITICAL only, so the standing chronic/gap baseline never floods:
+  //   0 → N : a source newly broke or the site went stale → ping with the hard list.
+  //   N → 0 : criticals cleared but the issue stays open for gaps → ping "cleared".
+  // Persisting N → N (or gaps-only 0 → 0) sends nothing.
+  if (critCount > 0 && priorCrit === 0) {
+    await sendEmail(`🔴 Maritime Reader: ${critCount} source/site issue(s) need attention`, critHtml(critRows));
+  } else if (critCount === 0 && priorCrit > 0) {
+    await sendEmail('✅ Maritime Reader: critical coverage issues cleared', '<p>The critical source/site issues have cleared (coverage gaps may remain — tracked in the GitHub issue).</p>');
+  }
 }
 
 if (process.argv[1] && process.argv[1].includes('audit-coverage')) {
