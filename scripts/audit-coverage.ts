@@ -124,8 +124,48 @@ export async function runAudit(topNames: string[]) {
   return report;
 }
 
-// CRITICAL = a source broke (acts on it); the rest are coverage FYIs.
-const CRITICAL = new Set(['SILENT', 'ERROR_STREAK', 'FOUND_COLLAPSE', 'EXTRACT_ERROR', 'MISSING_SOURCE']);
+const FEED_STALE_HOURS = 4;    // homepage feed should be within ~2 delta cycles of the DB
+const BASE_STALE_DAYS = 9;     // base index (full-archive search) rebuilds weekly → flag at >9d
+
+// SITE FRESHNESS (gap #2, 2026-06-26) — the one user-visible failure with no alarm:
+// the deployed feed/search can lag the DB (publish-delta stopped) or the base
+// search index can age out (source-filtered search showed 3-day-stale). Compares
+// what the LIVE site shows to what the DB has — no GHA cross-repo token needed for
+// FEED_STALE; BASE_STALE uses V2_DISPATCH_TOKEN if present (else skipped, noted).
+async function checkSiteFreshness(): Promise<{ name: string; flags: string[]; note: string }> {
+  const flags: string[] = [];
+  const notes: string[] = [];
+  // FEED_STALE — apex newest <time> vs DB newest feed-eligible (matches the feed query)
+  try {
+    const html = await (await fetch('https://maritimereader.com/', { headers: { 'User-Agent': 'coverage-audit' } })).text();
+    const m = html.match(/datetime="([^"]+)"/);
+    const siteNewest = m ? Date.parse(m[1]) : NaN;
+    const dbRows = await jget(`articles?select=published_at&content_quality=in.(visible,pending)&published_at_source=neq.scraper_default&published_at=lte.${new Date().toISOString()}&order=published_at.desc&limit=1`);
+    const dbNewest = dbRows[0]?.published_at ? Date.parse(dbRows[0].published_at) : NaN;
+    if (!Number.isNaN(siteNewest) && !Number.isNaN(dbNewest)) {
+      const lagH = (dbNewest - siteNewest) / 3_600_000;
+      notes.push(`feed lag ${lagH.toFixed(1)}h (site ${m![1].slice(0, 16)} vs DB ${dbRows[0].published_at.slice(0, 16)})`);
+      if (lagH > FEED_STALE_HOURS) flags.push('FEED_STALE');
+    } else notes.push('feed freshness: could not read site/DB newest');
+  } catch (e: any) { notes.push('feed check error: ' + (e?.message || e).slice(0, 60)); }
+  // BASE_STALE — last successful deploy-base age (needs cross-repo token)
+  const tok = process.env.V2_DISPATCH_TOKEN;
+  if (tok) {
+    try {
+      const runs = await (await fetch('https://api.github.com/repos/tufanography/maritime-reader-v2/actions/workflows/deploy-base.yml/runs?status=success&per_page=1', { headers: { Authorization: `Bearer ${tok}`, Accept: 'application/vnd.github+json', 'User-Agent': 'coverage-audit' } })).json();
+      const last = runs?.workflow_runs?.[0]?.created_at;
+      if (last) {
+        const days = (Date.now() - Date.parse(last)) / 86_400_000;
+        notes.push(`base build ${days.toFixed(1)}d ago`);
+        if (days > BASE_STALE_DAYS) flags.push('BASE_STALE');
+      }
+    } catch (e: any) { notes.push('base-age check error'); }
+  } else notes.push('base-age skipped (no V2_DISPATCH_TOKEN)');
+  return { name: 'SITE FRESHNESS', flags, note: notes.join(' · ') };
+}
+
+// CRITICAL = a source broke / site is stale (acts on it); the rest are coverage FYIs.
+const CRITICAL = new Set(['SILENT', 'ERROR_STREAK', 'FOUND_COLLAPSE', 'EXTRACT_ERROR', 'MISSING_SOURCE', 'FEED_STALE', 'BASE_STALE']);
 
 function buildBody(report: any[]): string {
   const crit = report.filter((r) => (r.flags || []).some((f: string) => CRITICAL.has(f)));
@@ -134,7 +174,7 @@ function buildBody(report: any[]): string {
   let b = `Daily coverage audit of ${report.length} enabled sources. Signal 1 (scrape_logs found/new — incl. CHRONIC_REJECTION) runs on all; Signal 2 (fetchRaw coverage) on the top news + P&I set. Grounded in production, so no re-implementation false alarms.\n\n`;
   b += `## 🚨 Broken / silent (${crit.length})\n`;
   if (!crit.length) b += `_none_\n`;
-  for (const r of crit) b += `- **${r.name}** [${r.flags.join(', ')}] — found median ${r.foundMedian}, last ${JSON.stringify(r.latestFound)}, nothing captured in ${r.daysSinceCapture} day(s)\n`;
+  for (const r of crit) b += `- **${r.name}** [${r.flags.join(', ')}] — ${r.note ?? `found median ${r.foundMedian}, last ${JSON.stringify(r.latestFound)}, nothing captured in ${r.daysSinceCapture} day(s)`}\n`;
   b += `\n## 🔁 Chronic rejection — finds content but captures ~none (${chronic.length})\n`;
   if (!chronic.length) b += `_none_\n`;
   for (const r of chronic) b += `- **${r.name}** — found Σ${r.foundSum} / new Σ${r.newSum} over last 20 runs (dateless circulars, login wall, or quality reject)\n`;
@@ -169,9 +209,11 @@ async function postIssue(report: any[]) {
 if (process.argv[1] && process.argv[1].includes('audit-coverage')) {
   (async () => {
     const report = await runAudit(ONLY || AUDIT_SOURCES);
+    report.unshift(await checkSiteFreshness());   // site-level FEED_STALE / BASE_STALE (gap #2)
     const flagged = report.filter((r) => r.flags && r.flags.length);
-    console.log(`\n=== AUDIT SUMMARY: ${flagged.length}/${report.length} sources flagged ===`);
+    console.log(`\n=== AUDIT SUMMARY: ${flagged.length} flagged ===`);
     for (const r of flagged) {
+      if (r.note && r.foundMedian === undefined) { console.log(`\n[${r.flags.join(', ')}] ${r.name} — ${r.note}`); continue; }
       console.log(`\n[${r.flags.join(', ')}] ${r.name} (found med ${r.foundMedian}, last ${JSON.stringify(r.latestFound)}; ${r.uncaptured}/${r.extracted} extracted-but-not-in-DB)`);
       for (const s of (r.sample || [])) console.log(`    • ${s.title}  ${s.url}`);
       if (r.covErr) console.log(`    extract error: ${r.covErr}`);
