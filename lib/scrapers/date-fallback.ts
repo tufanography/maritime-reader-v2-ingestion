@@ -15,6 +15,14 @@
 // of the freshness-ordered feed (they'd otherwise pollute it) while still
 // surfacing them in search / the archive. NEVER returns null → the article is
 // always datable, so the date gate stops dropping real content.
+//
+// SITE-SIDE CONTRACT (Phase 2, maritime-reader-v2): inferred dates are written
+// with published_at_source='scraper_default' (an allowed CHECK value; 'inferred'
+// is rejected by the constraint). The feed query will therefore exclude
+// `published_at_source = 'scraper_default'`. ⚠️ ACCEPTED SIDE EFFECT: 6 pre-existing
+// rows already carry 'scraper_default' (genuine scraper-assigned dates, NOT
+// these inferred ones) and will also drop out of the feed — deemed negligible
+// (6 rows) and intentional. They remain searchable/archived like the inferred ones.
 
 export interface FallbackDate {
   iso: string;
