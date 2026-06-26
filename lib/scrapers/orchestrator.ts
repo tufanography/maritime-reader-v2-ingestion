@@ -9,6 +9,7 @@ import { fetchHtmlSource, FetchError, type HtmlScraperConfig } from './html';
 import { hashUrl, sleep } from './util';
 import { looksLikeArticle } from './quality';
 import { moderate } from './moderation';
+import { resolveFallbackDate } from './date-fallback';
 import { extractTagIds } from '../tagging/extract';
 import { extractKeywords } from '../tagging/keywords';
 import { deriveDocumentType } from '../v3/document-type';
@@ -192,9 +193,30 @@ export async function scrapeSource(source: Source): Promise<ScrapeResult> {
       rejected++;
       continue;
     }
-    if (requireDate && !raw.published_at) {
-      rejected++;
-      continue;
+    if (!raw.published_at) {
+      // Dateless content. Sources that opt in (scraper_config.date_fallback) get
+      // an INFERRED date instead of being dropped — many P&I circulars/press
+      // releases carry no date at all (or only a month+year), so the date gate
+      // was silently rejecting all of them (Gard 120/run, Steamship, American).
+      // resolveFallbackDate: past month → its last day; current month / no month
+      // → capture time. Marked published_at_source='scraper_default' + confidence
+      // 'low' — the date is INFERRED (day unknown), so the SITE keeps these out of
+      // the freshness-ordered feed while still indexing them for search/archive.
+      // ('scraper_default' is the inferred-date marker: it's an allowed CHECK value
+      // — 'inferred' is NOT and would 400 the insert — and only 6 legacy rows carry
+      // it, so the feed exclusion is effectively dedicated to these.) looksLikeArticle
+      // already ran above, so nav/CTA pages don't reach here — VERIFY the inserted
+      // scraper_default rows are real articles before wiring the site side.
+      const useFallback = (source.scraper_config as { date_fallback?: boolean } | null)?.date_fallback === true;
+      if (useFallback) {
+        const fb = resolveFallbackDate(`${raw.title}\n${raw.excerpt ?? ''}`, new Date().toISOString());
+        raw.published_at = fb.iso;
+        raw.published_at_source = 'scraper_default';
+        raw.published_at_confidence = 'low';
+      } else if (requireDate) {
+        rejected++;
+        continue;
+      }
     }
 
     let summary = extractSummary(raw.excerpt);
