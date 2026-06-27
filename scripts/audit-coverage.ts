@@ -86,7 +86,30 @@ export async function runAudit(topNames: string[]) {
     const newestRow = await jget(`articles?select=created_at&source_id=eq.${src.id}&order=created_at.desc&limit=1`);
     const newestTs = newestRow[0]?.created_at ? Date.parse(newestRow[0].created_at) : 0;
     const daysSinceCapture = newestTs ? Math.round((Date.now() - newestTs) / 86_400_000) : 999;
-    const noRecentCapture = daysSinceCapture > STALE_DAYS;
+    // SILENT gate uses PUBLISH cadence, not capture timing. created_at is polluted
+    // by bulk backfills (a source backfilled in one batch then quiet looks "silent"
+    // via created_at even though its real publish rhythm is fine — the v2 cutover +
+    // backfills made created_at meaningless for this). Baseline each source's OWN
+    // rhythm from published_at (real dates only — exclude scraper_default), in
+    // DISTINCT PUBLISHING DAYS so a same-day burst (USCG) isn't a ~0 gap. SILENT
+    // only when the newest real article is older than 3x the source's median
+    // day-gap, clamped [3,365], with a 60d floor for low-data sources (ultra-rare
+    // or single-burst sources aren't false-flagged). Validated 2026-06-27 on the
+    // live set: USCG/Caribbean/Black Sea/NorthStandard cleared, London/Xinde kept.
+    const pubRows = await jget(`articles?select=published_at&source_id=eq.${src.id}&published_at_source=neq.scraper_default&published_at=lte.${new Date().toISOString()}&order=published_at.desc&limit=120`);
+    const pubTimes = (pubRows as any[]).map((r) => Date.parse(r.published_at)).filter((n) => !Number.isNaN(n));
+    let noRecentCapture: boolean;
+    if (pubTimes.length >= 4) {
+      const pubStaleDays = (Date.now() - pubTimes[0]) / 86_400_000;
+      const days = [...new Set(pubTimes.map((t) => Math.floor(t / 86_400_000)))].sort((a, b) => b - a);
+      const dGaps: number[] = [];
+      for (let i = 1; i < days.length; i++) dGaps.push(days[i - 1] - days[i]);
+      const cadence = Math.max(3, Math.min(365, 3 * median(dGaps)));
+      const threshold = days.length < 6 ? Math.max(60, cadence) : cadence;
+      noRecentCapture = pubStaleDays > threshold;
+    } else {
+      noRecentCapture = daysSinceCapture > STALE_DAYS;  // too few real dates to baseline → flat fallback
+    }
     const errStreak = logs.length >= 3 && logs.slice(0, 3).every((l: any) => l.status === 'error');
     const foundCollapse = noRecentCapture && med >= FOUND_BASELINE_MIN && latest2.length >= 2 && latest2.every((f: number) => f < Math.max(2, med * 0.3));
     const silent = noRecentCapture && med === 0 && founds.length >= 4;
@@ -177,8 +200,13 @@ async function checkSiteFreshness(): Promise<{ name: string; flags: string[]; no
   return { name: 'SITE FRESHNESS', flags, note: notes.join(' · ') };
 }
 
-// CRITICAL = a source broke / site is stale (acts on it); the rest are coverage FYIs.
-const CRITICAL = new Set(['SILENT', 'ERROR_STREAK', 'FOUND_COLLAPSE', 'EXTRACT_ERROR', 'MISSING_SOURCE', 'FEED_STALE', 'BASE_STALE']);
+// CRITICAL = a source broke / site is stale (emails on it); the rest are coverage FYIs.
+// EXTRACT_ERROR is NOT critical: it means the AUDIT's own fetchRaw threw (often a
+// requires_js/CF render hiccup) while the source itself may be capturing fine
+// (NorthStandard 2026-06-26: EXTRACT_ERROR but 28 articles captured that day). Real
+// outages are caught by SILENT/ERROR_STREAK/FOUND_COLLAPSE; EXTRACT_ERROR stays a
+// FYI so it never emails a false "broken" alarm.
+const CRITICAL = new Set(['SILENT', 'ERROR_STREAK', 'FOUND_COLLAPSE', 'MISSING_SOURCE', 'FEED_STALE', 'BASE_STALE']);
 
 function buildBody(report: any[]): string {
   const crit = report.filter((r) => (r.flags || []).some((f: string) => CRITICAL.has(f)));
