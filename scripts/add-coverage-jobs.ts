@@ -11,26 +11,21 @@ const sb = createClient(URL, KEY, { auth: { persistSession: false } });
 const APPLY = process.env.APPLY === '1';
 
 // name -> { addJobs?: append to scraper_config.jobs, addGroup?: append a new job_group }
+// BATCH 2 (2026-06-27). Batch 1 (UK P&I news/safety, Skuld topics, West
+// notice-to-members, Steamship info-notices) already APPLIED — do NOT re-add or
+// it duplicates jobs. This batch: Japan P&I English news (the chronic-reject was
+// a selector bug, NOT a login wall — `a[href*="/en/news/"]` extracts 5/6 clean)
+// and UK P&I press-releases (static, distinct from news/circulars).
 const PLAN: Record<string, { addJobs?: any[]; addGroup?: any[]; addToGroup?: { index: number; jobs: any[] } }> = {
+  'Japan P&I Club': {
+    addJobs: [
+      { list_url: 'https://www.piclub.or.jp/en/topics/news', item_selector: 'a[href*="/en/news/"]' },
+    ],
+  },
   'UK P&I Club': {
     addJobs: [
-      { list_url: 'https://www.ukpandi.com/news-and-resources/news/' },
-      { list_url: 'https://www.ukpandi.com/news-and-resources/safety-advice-training/' },
+      { list_url: 'https://www.ukpandi.com/news-and-resources/press-releases/' },
     ],
-  },
-  'Skuld': {
-    addJobs: [
-      { list_url: 'https://www.skuld.com/topics/', item_selector: 'a[href*="/topics/"][href*="/20"], a[href*="/cargo/"], a[href*="/safety/"]' },
-    ],
-  },
-  // Add to an EXISTING group (not a new one) so the rotation length — and thus
-  // per-section freshness — does NOT degrade. West circulars join grp0 (news);
-  // Steamship info-notices join grp2 (loss-prevention/circulars).
-  'West of England': {
-    addToGroup: { index: 0, jobs: [{ list_url: 'https://www.westpandi.com/news-and-resources/notice-to-members', item_selector: 'a[href*="/notice-to-members/"]' }] },
-  },
-  'Steamship Mutual': {
-    addToGroup: { index: 2, jobs: [{ list_url: 'https://www.steamshipmutual.com/information-notices' }] },
   },
 };
 
