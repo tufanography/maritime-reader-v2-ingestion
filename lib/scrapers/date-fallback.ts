@@ -3,18 +3,23 @@
 // when a source opts in (scraper_config.date_fallback === true) AND the normal
 // date extraction (date.ts) found nothing — so we never override a real date.
 //
-// Rule (user-specified 2026-06-26):
+// Rule — the MONTH cases are user-specified (2026-06-26); the no-month case is
+// NOT (it previously defaulted to "today" and was wrongly attributed to the
+// user — that default is exactly what dated decades-old dateless circulars as
+// fresh; removed 2026-06-28):
 //   • A month+year is found and it is a PAST month  → LAST DAY of that month.
-//       (It wasn't there during that month and only surfaced later, so it must
-//        not look freshly-published today; both "we scraped that month" and "we
-//        didn't" collapse to the same answer: end of that month.)
-//   • A month+year is found and it is the CURRENT month → capture date (today).
-//   • No month+year at all → capture date (today).
+//       ("April 2025" first seen in June → 30 April 2025, NEVER June. It only
+//        surfaced later, so it must not look freshly-published.)
+//   • A month+year is found and it is the CURRENT month → capture date (today's
+//       day). ("April 2025" first caught on 25 April → 25 April — the capture
+//        day IS within the correct month, so it's a faithful first-seen date.)
+//   • NO month+year at all → return null. We have ZERO date signal, so we do NOT
+//     fabricate "today" (that's the lie that made old content look new). The
+//     caller drops the item rather than stamping a misleading recent date.
 //
-// Every fallback date is marked dayKnown:false so the SITE can keep these out
-// of the freshness-ordered feed (they'd otherwise pollute it) while still
-// surfacing them in search / the archive. NEVER returns null → the article is
-// always datable, so the date gate stops dropping real content.
+// Month-inferred dates are marked dayKnown:false so the SITE keeps them out of
+// the freshness-ordered feed (they'd otherwise pollute it) while still surfacing
+// them in search / the archive. Returns null ONLY for the no-signal case.
 //
 // SITE-SIDE CONTRACT (Phase 2, maritime-reader-v2): inferred dates are written
 // with published_at_source='scraper_default' (an allowed CHECK value; 'inferred'
@@ -27,7 +32,7 @@
 export interface FallbackDate {
   iso: string;
   dayKnown: false;
-  basis: 'past_month_end' | 'current_month_capture' | 'no_date_capture';
+  basis: 'past_month_end' | 'current_month_capture';
 }
 
 const MONTH_RE =
@@ -47,21 +52,22 @@ export function findMonthYear(text: string): { year: number; month: number } | n
   return { year: parseInt(m[2], 10), month }; // month is 0-based
 }
 
-/** Resolve a fallback publish date per the rule above. `nowIso` is the capture time. */
-export function resolveFallbackDate(text: string, nowIso: string): FallbackDate {
+/** Resolve a fallback publish date per the rule above. `nowIso` is the capture
+ *  time. Returns null when there is NO month+year signal at all — the caller
+ *  must NOT stamp such an item with "today" (it would mis-date dateless old
+ *  content as fresh); it should drop the item instead. */
+export function resolveFallbackDate(text: string, nowIso: string): FallbackDate | null {
   const now = new Date(nowIso);
   const curY = now.getUTCFullYear();
   const curM = now.getUTCMonth(); // 0-based
   const my = findMonthYear(text);
-  if (my) {
-    const isPast = my.year < curY || (my.year === curY && my.month < curM);
-    if (isPast) {
-      const lastDay = new Date(Date.UTC(my.year, my.month + 1, 0)).getUTCDate();
-      const iso = `${my.year}-${String(my.month + 1).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}T12:00:00.000Z`;
-      return { iso, dayKnown: false, basis: 'past_month_end' };
-    }
-    // current month (or, rarely, a future month) → treat as captured now
-    return { iso: nowIso, dayKnown: false, basis: 'current_month_capture' };
+  if (!my) return null; // no date signal → don't fabricate; caller drops it
+  const isPast = my.year < curY || (my.year === curY && my.month < curM);
+  if (isPast) {
+    const lastDay = new Date(Date.UTC(my.year, my.month + 1, 0)).getUTCDate();
+    const iso = `${my.year}-${String(my.month + 1).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}T12:00:00.000Z`;
+    return { iso, dayKnown: false, basis: 'past_month_end' };
   }
-  return { iso: nowIso, dayKnown: false, basis: 'no_date_capture' };
+  // current month (saw it first this month) → the capture day is faithful
+  return { iso: nowIso, dayKnown: false, basis: 'current_month_capture' };
 }

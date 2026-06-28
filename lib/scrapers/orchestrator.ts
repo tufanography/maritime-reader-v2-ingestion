@@ -215,6 +215,13 @@ export async function scrapeSource(source: Source): Promise<ScrapeResult> {
         // article titles — the first-match would back-date a brand-new item by
         // years. The title is the publish context and rarely cites a foreign date.
         const fb = resolveFallbackDate(raw.title ?? '', new Date().toISOString());
+        if (!fb) {
+          // No month+year anywhere → we have zero date signal. Do NOT stamp it
+          // with "today" (the old behaviour that surfaced dateless decades-old
+          // circulars as fresh). Drop it instead — honest over complete.
+          rejected++;
+          continue;
+        }
         raw.published_at = fb.iso;
         raw.published_at_source = 'scraper_default';
         raw.published_at_confidence = 'low';
