@@ -28,6 +28,17 @@ jobs:
           node-version: '22'
           cache: 'npm'
       - run: npm ci
+      - name: Run date-integrity guard
+        # Cheap daily check (no network): flags VISIBLE articles dated at scrape
+        # time via the scraper_default fallback — the "old circular shows as
+        # today" signature. continue-on-error so a hit is surfaced (exit 2) in
+        # the run without blocking the coverage audit below. Deep verify+fix
+        # (VERIFY=1 FIX=1, Playwright) is run from the scrape workflow / on demand.
+        continue-on-error: true
+        run: npx tsx scripts/audit-date-integrity.ts
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
       - name: Run coverage audit
         run: npx tsx scripts/audit-coverage.ts
         env:
