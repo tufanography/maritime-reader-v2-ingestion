@@ -49,15 +49,25 @@ export function tryParse(raw: string | null | undefined): string | null {
     }
     return null;
   }
-  // Native parse
+  // Date-only strings ("18 May 2026", "30/05/2026") FIRST, via the regex path
+  // which builds UTC midnight (mkIso → T00:00:00Z). `new Date("18 May 2026")`
+  // parses in the MACHINE's local timezone, so on a UTC+ host it lands at the
+  // previous day's 21:00Z and the day slices one short (root cause of the
+  // NorthStandard/Gard "-1 day" mis-dating when run locally vs GHA). Native
+  // parse is reserved below for strings that carry an explicit time / TZ
+  // (ISO timestamps), where new Date() is already unambiguous.
+  const hasExplicitTime = /\dT\d|\d:\d{2}/.test(trimmed) || /([+-]\d{2}:?\d{2}|Z)$/.test(trimmed);
+  if (!hasExplicitTime) {
+    for (const iso of findAllDates(trimmed)) if (!isFuture(iso)) return iso;
+  }
+  // Native parse (full ISO timestamps with explicit time/zone)
   const direct = new Date(trimmed);
   if (!isNaN(direct.getTime())) {
     const iso = direct.toISOString();
     if (!isFuture(iso)) return iso;
   }
-  // Fall through: try regex extraction
-  const all = findAllDates(trimmed);
-  for (const iso of all) if (!isFuture(iso)) return iso;
+  // Fall through: regex extraction for anything left.
+  for (const iso of findAllDates(trimmed)) if (!isFuture(iso)) return iso;
   return null;
 }
 
