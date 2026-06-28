@@ -32,7 +32,12 @@ async function scan(): Promise<Row[]> {
   for (;;) {
     const { data, error } = await sb.from('articles')
       .select('id,title,url,published_at,created_at,published_at_source,published_at_confidence,source_id')
-      .eq('content_quality', 'visible').eq('published_at_source', 'scraper_default')
+      // SITE visibility = null OR visible OR pending (see maritime-reader-v2
+      // baseVisible). The guard MUST match it — an earlier 'visible'-only filter
+      // silently ignored ~59 user-facing 'pending' scrape-time rows and reported
+      // a false 0 (2026-06-29). Match the site exactly.
+      .or('content_quality.is.null,content_quality.in.(visible,pending)')
+      .eq('published_at_source', 'scraper_default')
       .not('published_at', 'is', null).gt('created_at', cursor)
       .order('created_at', { ascending: true }).limit(1000);
     if (error) throw new Error(error.message);
