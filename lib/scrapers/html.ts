@@ -76,6 +76,40 @@ export function resolveArticleDate(args: {
     null;
   addCandidate(tryParse(metaRaw), { source: 'original', confidence: 'high', step: 'meta', raw: metaRaw ?? undefined });
 
+  // Step 2b — JSON-LD structured data (schema.org). Many SPA sites (Gard's
+  // chakra-ui circulars, etc.) omit meta/<time> tags but embed an authoritative
+  // `datePublished` in a <script type="application/ld+json">. This is curated,
+  // machine-readable publication intent — high confidence, on par with meta.
+  // Without it, Gard circulars fell through to body_bare and picked a YEAR out
+  // of the title ("…Act 2002…" → 2002), mis-dating real 2003 circulars; or to
+  // the scraper_default scrape-time fallback, showing decades-old circulars as
+  // "just published". Walk every ld+json block, including @graph arrays, and
+  // take the first datePublished / dateCreated / datePosted we can parse.
+  const jsonLdDate = (() => {
+    const nodes = $('script[type="application/ld+json"]').toArray();
+    for (const node of nodes) {
+      const raw = $(node).contents().text();
+      if (!raw || !/datePublished|dateCreated|datePosted/i.test(raw)) continue;
+      let parsed: unknown;
+      try { parsed = JSON.parse(raw); } catch { continue; }
+      const stack: unknown[] = [parsed];
+      while (stack.length) {
+        const cur = stack.pop();
+        if (Array.isArray(cur)) { stack.push(...cur); continue; }
+        if (cur && typeof cur === 'object') {
+          const o = cur as Record<string, unknown>;
+          for (const key of ['datePublished', 'dateCreated', 'datePosted']) {
+            const v = o[key];
+            if (typeof v === 'string' && v.trim()) return v.trim();
+          }
+          for (const v of Object.values(o)) if (v && typeof v === 'object') stack.push(v);
+        }
+      }
+    }
+    return null;
+  })();
+  addCandidate(tryParse(jsonLdDate), { source: 'original', confidence: 'high', step: 'json_ld', raw: jsonLdDate ?? undefined });
+
   // Step 3 — <time datetime="...">. Semantic-aware: not every <time>
   // element is a publication timestamp. Modern templates also use <time>
   // for sidebar widgets, "current time" indicators, last-modified
