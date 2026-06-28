@@ -5,10 +5,19 @@ export function hashUrl(url: string): string {
   let cleaned = url.trim();
   try {
     const u = new URL(url);
-    // Remove tracking params
-    ['utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content', 'fbclid', 'gclid'].forEach(
+    // Remove tracking / no-op params that don't change article identity.
+    // `redirect` (Britannia links the same article with and without `?redirect=`)
+    // was creating DUPLICATE rows — one url_hash per variant — so the same
+    // article showed twice in feeds and source-filtered views (2026-06-29).
+    ['utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content', 'fbclid', 'gclid', 'redirect'].forEach(
       (k) => u.searchParams.delete(k),
     );
+    // Also drop ANY empty-valued param ("?redirect=", "?ref=") — an empty value
+    // never changes which article a URL points to but does change the raw string
+    // (and thus the hash). Strip them so variants collapse to one row.
+    for (const k of [...u.searchParams.keys()]) {
+      if (u.searchParams.get(k) === '') u.searchParams.delete(k);
+    }
     u.hash = '';
     cleaned = u.toString().replace(/\/$/, '');
   } catch {
