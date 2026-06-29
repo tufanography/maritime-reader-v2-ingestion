@@ -27,7 +27,12 @@ concurrency:
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # 45 not 25: a full run (54 sources, many Playwright/requires_js) was hitting
+    # the 25-min cap and getting cancelled mid-run, leaving later sources (P&I /
+    # class) stale. Public repo → GHA minutes are unlimited, so the longer cap is
+    # free and lets a run actually finish. Per-source timeouts still bound any
+    # single hung source. (2026-06-29)
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
