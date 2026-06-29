@@ -12,6 +12,7 @@ import * as dotenv from 'dotenv';
 dotenv.config({ path: '.env.local', override: true });
 
 import { scrapeAllDue } from '../lib/scrapers/orchestrator';
+import { closePlaywright } from '../lib/scrapers/playwright-fetcher';
 
 async function main() {
   // Force flag: skip the per-source "due" check and scrape every
@@ -47,6 +48,19 @@ async function main() {
   for (const r of results) {
     console.log(`  [${r.status}] ${r.source_name?.padEnd(32) ?? '?'} inserted=${r.inserted ?? 0}${r.error ? ' err=' + r.error.slice(0, 60) : ''}`);
   }
+
+  // Release the Playwright browser before exiting. Without this the lazily-
+  // launched Chromium (used by requires_js sources) stays connected and keeps
+  // Node's event loop alive — the process can't exit on its own, so the GHA
+  // job sits idle after "Done" until the job timeout KILLS it and the run is
+  // marked "cancelled" (root-caused 2026-06-29: 8/8 cancelled runs had a
+  // chrome-headless-shell orphan + a multi-minute post-"Done" hang; clean-exit
+  // runs had neither). closePlaywright() force-closes the browser even if a
+  // requires_js source left a dangling page.goto after its per-source timeout;
+  // the explicit exit(0) is a bulletproof backstop so a stray handle can never
+  // pad the run out to the timeout again.
+  await closePlaywright();
+  process.exit(0);
 }
 
 main().catch((e) => {
