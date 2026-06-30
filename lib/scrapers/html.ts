@@ -239,6 +239,15 @@ export type HtmlScraperConfig = {
   item_selector?: string;
   title_selector?: string;
   content_selector?: string;
+  /** CSS selector for chrome to STRIP from the detail page before the
+   *  excerpt is extracted (author byline, breadcrumb, share/related/nav,
+   *  cookie banner). The matched elements are `.remove()`d so their text
+   *  never reaches the searchable excerpt — the scraper-level equivalent of
+   *  Pagefind's data-pagefind-ignore. Applied to BOTH the content_selector
+   *  path and the article/main/body fallback. Comma-separate multiple
+   *  selectors. Validated per P&I source 2026-06-30 (byline polluted search,
+   *  e.g. "Director, Singapore" surfaced unrelated articles). */
+  exclude_selector?: string;
   max_items?: number;
   /** Optional suffix appended to each scraped item URL. Lets us rewrite
    *  index links like /pdf/ → /pdf/download where the actual binary lives. */
@@ -557,7 +566,17 @@ export async function fetchHtmlSource(args: {
     const all: RawArticle[] = [];
     for (const job of config.jobs) {
       try {
-        const out = await fetchHtmlSource({ config: job, delayMs, knownUrls });
+        // Inherit the parent's exclude_selector into each job unless the job
+        // overrides it. Jobs are otherwise self-contained configs, so a
+        // source-level exclude_selector (the common case — strip the same
+        // byline/nav chrome across every job) would otherwise be silently
+        // dropped at this recursion. (2026-06-30: P&I byline pollution fix —
+        // these sources are all jobs/job_groups based.)
+        const jobCfg =
+          config.exclude_selector !== undefined && job.exclude_selector === undefined
+            ? { ...job, exclude_selector: config.exclude_selector }
+            : job;
+        const out = await fetchHtmlSource({ config: jobCfg, delayMs, knownUrls });
         all.push(...out);
       } catch (err) {
         // One bad job shouldn't kill the rest. Log and continue.
@@ -846,15 +865,22 @@ export async function fetchHtmlSource(args: {
       if (!title) return null;
 
       let excerpt: string;
+      // Strip configured chrome (author byline, breadcrumb, share/related,
+      // nav, cookie banner) BEFORE extracting the excerpt so its text never
+      // reaches the searchable index. Done on a clone so the image/date
+      // extraction below still sees the FULL document — a future
+      // exclude_selector must never accidentally drop the publish date.
+      const $body = config.exclude_selector ? cheerio.load($.html()) : $;
+      if (config.exclude_selector) $body(config.exclude_selector).remove();
       if (config.content_selector) {
-        const parts = $(config.content_selector)
-          .map((_, el) => $(el).text())
+        const parts = $body(config.content_selector)
+          .map((_, el) => $body(el).text())
           .get()
           .map((t) => t.replace(/\s+/g, ' ').trim())
           .filter(Boolean);
         excerpt = parts.join(' ').slice(0, 2000);
       } else {
-        const bodyHtml = $('article').html() ?? $('main').html() ?? $('body').html() ?? '';
+        const bodyHtml = $body('article').html() ?? $body('main').html() ?? $body('body').html() ?? '';
         excerpt = stripHtml(bodyHtml).slice(0, 2000);
       }
 
