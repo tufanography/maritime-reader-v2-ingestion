@@ -491,19 +491,37 @@ type LinkItem = { url: string; linkText: string };
  *  modified entries first (by <lastmod> when present, else original
  *  document order). */
 async function fetchOneSitemap(sitemapUrl: string): Promise<string> {
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 30_000);
-  try {
-    const res = await fetch(sitemapUrl, {
-      headers: browserHeaders(),
-      signal: ctrl.signal,
-      redirect: 'follow',
-    });
-    if (!res.ok) throw new FetchError(res.status, sitemapUrl);
-    return await res.text();
-  } finally {
-    clearTimeout(timer);
+  // ONE retry on abort/network error. Big sitemaps behind a Cloudflare WAF (e.g.
+  // NorthStandard's 3.2 MB sitemap.xml) intermittently stall past the 30s abort on
+  // the GHA runner — ~45% of runs aborted with "This operation was aborted",
+  // found=0, and the whole source logged as error even though it recovered on the
+  // next 6h tick (measured 2026-07-09). The sitemap normally responds in ~1s, so a
+  // single retry converts almost all of these to success. A real HTTP status
+  // (FetchError) is NOT retried — a second identical GET won't fix a 404/403.
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 30_000);
+    try {
+      const res = await fetch(sitemapUrl, {
+        headers: browserHeaders(),
+        signal: ctrl.signal,
+        redirect: 'follow',
+      });
+      if (!res.ok) throw new FetchError(res.status, sitemapUrl);
+      return await res.text();
+    } catch (e) {
+      lastErr = e;
+      if (attempt === 0 && !(e instanceof FetchError)) {
+        await new Promise((r) => setTimeout(r, 1000)); // brief backoff, then one more try
+        continue;
+      }
+      throw e;
+    } finally {
+      clearTimeout(timer);
+    }
   }
+  throw lastErr; // unreachable (loop either returns or throws), satisfies the type checker
 }
 
 /** Read a sitemap URL and return its article URLs sorted newest-first.
