@@ -77,22 +77,34 @@ function feedHeaders(): Record<string, string> {
  *    (b) retry once with a fresh User-Agent + small delay if the first
  *        attempt hits a 403/429 (Cloudflare bot challenge from a
  *        flagged Vercel IP). */
+// Append a unique query param so a CDN can't hand us a STALE cached feed. Splash247's
+// origin sends `Cache-Control: s-maxage=2592000` (30 days for shared caches), and the
+// scraper — on a datacenter IP — was served the same ~10 items for ~24h, missing
+// everything published between: our newest lagged the LIVE feed by ~18h while fetchRss
+// from a clean IP returned the fresh items (MEASURED 2026-07-16). A fresh cache key per
+// request forces the origin copy; the no-cache request headers reinforce it. Harmless
+// for feeds that aren't cached (WordPress ignores the unknown param).
+function bustCache(url: string): string {
+  return url + (url.includes('?') ? '&' : '?') + '_=' + Date.now();
+}
+
 async function fetchFeedXml(feedUrl: string): Promise<string> {
+  const noCacheHeaders = () => ({ ...feedHeaders(), 'Cache-Control': 'no-cache', Pragma: 'no-cache' });
   const ctrl1 = new AbortController();
   const t1 = setTimeout(() => ctrl1.abort(), 25_000);
   let res: Response;
   try {
-    res = await fetch(feedUrl, { headers: feedHeaders(), redirect: 'follow', signal: ctrl1.signal });
+    res = await fetch(bustCache(feedUrl), { headers: noCacheHeaders(), redirect: 'follow', signal: ctrl1.signal });
   } finally { clearTimeout(t1); }
   if (res.status === 403 || res.status === 415 || res.status === 429) {
     // Drain body so the connection can be reused.
     try { await res.text(); } catch { /* */ }
-    // Wait 15-30 s, then try once more with a fresh UA.
+    // Wait 15-30 s, then try once more with a fresh UA + fresh cache key.
     await sleep(15_000 + Math.floor(Math.random() * 15_000));
     const ctrl2 = new AbortController();
     const t2 = setTimeout(() => ctrl2.abort(), 25_000);
     try {
-      res = await fetch(feedUrl, { headers: feedHeaders(), redirect: 'follow', signal: ctrl2.signal });
+      res = await fetch(bustCache(feedUrl), { headers: noCacheHeaders(), redirect: 'follow', signal: ctrl2.signal });
     } finally { clearTimeout(t2); }
   }
   if (!res.ok) throw new Error(`Status code ${res.status}`);
