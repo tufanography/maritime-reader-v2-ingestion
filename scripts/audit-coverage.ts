@@ -29,6 +29,11 @@ const AUDIT_SOURCES = [
 ];
 const FOUND_BASELINE_MIN = 5;  // only judge a collapse when the source normally finds >= this
 const UNCAPTURED_WARN = 3;     // warn when this many extracted items are missing from our DB
+const FEED_LAG_HOURS = 12;     // our newest real article vs the source's LIVE feed newest.
+                               // Healthy sources lag < ~5h (one scrape interval + article
+                               // age); 12h = clearly "serving stale content". Self-calibrates:
+                               // a genuinely quiet source has a live-newest that's old too, so
+                               // the lag stays ~0 and it never false-flags.
 const STALE_DAYS = 14;         // "dark" only after this long with zero captures. 14 (not 7) to
                                // avoid false SILENT on low-frequency sources (MoU detention lists,
                                // USCG, Panama Canal publish ~monthly). KNOWN RESIDUAL: a genuinely
@@ -121,10 +126,13 @@ export async function runAudit(topNames: string[]) {
     // hash each extracted url (the SAME hashUrl production stores) and keep only
     // the ones genuinely absent from our DB → true extracted-but-not-captured.
     let extractedTotal = 0;
+    let srcNewestPub = NaN;   // the source's LIVE newest published_at (from fetchRaw)
     let uncaptured: { title: string; url: string }[] = [], covErr: string | null = null;
     if (topSet.has(name)) try {
       const extracted = await fetchRaw(src);
       extractedTotal = extracted.length;
+      const extPubs = extracted.map((r) => (r.published_at ? Date.parse(r.published_at) : NaN)).filter((n) => !Number.isNaN(n));
+      srcNewestPub = extPubs.length ? Math.max(...extPubs) : NaN;
       const hashes = extracted.map((r) => hashUrl(r.url));
       const inDb = new Set<string>();
       for (let i = 0; i < hashes.length; i += 50) {
@@ -141,16 +149,29 @@ export async function runAudit(topNames: string[]) {
         .map((r) => ({ title: (r.title || '').slice(0, 60), url: r.url }));
     } catch (e: any) { covErr = (e?.message || String(e)).slice(0, 120); }
 
+    // SIGNAL 3 — FEED_LAG: our newest real article vs the source's LIVE newest (from the
+    // same fetchRaw, so no extra fetch). Catches "scraper reports success but serves STALE
+    // content" — the exact failure Splash247 hid behind found=10/new=0 when a CDN handed
+    // the scraper a stale cached feed for ~24h (MEASURED 2026-07-16: our newest lagged the
+    // live feed 18h). found-count checks miss it (count stays healthy); comparing us to the
+    // source directly self-calibrates — a genuinely quiet source lags ~0.
+    let feedLagH: number | null = null;
+    if (!Number.isNaN(srcNewestPub) && pubTimes.length) feedLagH = (srcNewestPub - pubTimes[0]) / 3_600_000;
+
     const flags: string[] = [];
     if (errStreak) flags.push('ERROR_STREAK');
     if (silent) flags.push('SILENT');
     else if (foundCollapse) flags.push('FOUND_COLLAPSE');
     if (chronicReject) flags.push('CHRONIC_REJECTION');
+    if (feedLagH != null && feedLagH > FEED_LAG_HOURS) flags.push('FEED_LAG');
     if (uncaptured.length >= UNCAPTURED_WARN) flags.push('UNCAPTURED_ITEMS');
     if (covErr) flags.push('EXTRACT_ERROR');
 
-    report.push({ name, type: src.type, foundMedian: med, latestFound: latest2, foundSum, newSum, daysSinceCapture, extracted: extractedTotal, uncaptured: uncaptured.length, flags, sample: uncaptured.slice(0, 4), covErr });
-    if (flags.length) console.log(`  ${name.padEnd(26)} found(med ${med}, Σ${foundSum}/new Σ${newSum}) lastCap ${daysSinceCapture}d | not-in-DB ${covErr ? 'ERR' : uncaptured.length} ⚠ ${flags.join(',')}`);
+    const lagNote = (feedLagH != null && feedLagH > FEED_LAG_HOURS)
+      ? `our newest article is ${Math.round(feedLagH)}h behind ${name}'s LIVE feed — the scraper looks healthy (found ${med}/run) but is serving stale content`
+      : undefined;
+    report.push({ name, type: src.type, foundMedian: med, latestFound: latest2, foundSum, newSum, daysSinceCapture, extracted: extractedTotal, uncaptured: uncaptured.length, feedLagH: feedLagH == null ? null : Math.round(feedLagH), note: lagNote, flags, sample: uncaptured.slice(0, 4), covErr });
+    if (flags.length) console.log(`  ${name.padEnd(26)} found(med ${med}, Σ${foundSum}/new Σ${newSum}) lastCap ${daysSinceCapture}d${feedLagH != null ? ' feedLag ' + feedLagH.toFixed(0) + 'h' : ''} | not-in-DB ${covErr ? 'ERR' : uncaptured.length} ⚠ ${flags.join(',')}`);
   }
   return report;
 }
@@ -206,7 +227,7 @@ async function checkSiteFreshness(): Promise<{ name: string; flags: string[]; no
 // (NorthStandard 2026-06-26: EXTRACT_ERROR but 28 articles captured that day). Real
 // outages are caught by SILENT/ERROR_STREAK/FOUND_COLLAPSE; EXTRACT_ERROR stays a
 // FYI so it never emails a false "broken" alarm.
-const CRITICAL = new Set(['SILENT', 'ERROR_STREAK', 'FOUND_COLLAPSE', 'MISSING_SOURCE', 'FEED_STALE', 'BASE_STALE']);
+const CRITICAL = new Set(['SILENT', 'ERROR_STREAK', 'FOUND_COLLAPSE', 'FEED_LAG', 'MISSING_SOURCE', 'FEED_STALE', 'BASE_STALE']);
 
 function buildBody(report: any[]): string {
   const crit = report.filter((r) => (r.flags || []).some((f: string) => CRITICAL.has(f)));
