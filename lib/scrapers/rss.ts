@@ -89,14 +89,20 @@ function bustCache(url: string): string {
 }
 
 async function fetchFeedXml(feedUrl: string): Promise<string> {
-  const noCacheHeaders = () => ({ ...feedHeaders(), 'Cache-Control': 'no-cache', Pragma: 'no-cache' });
+  // Cache-busting is done by the unique ?_=<ts> query param ALONE (a fresh cache key →
+  // the CDN can't serve a stale copy). NO `Cache-Control: no-cache` request header:
+  // that made some origins bypass their cache toward a slow/broken backend and HANG or
+  // 502 (MEASURED 2026-07-16: offshore-energy.biz/feed/ served 200 with the param but
+  // timed out / 502'd once the no-cache header was added). The param is the safe fix.
   const ctrl1 = new AbortController();
   const t1 = setTimeout(() => ctrl1.abort(), 25_000);
   let res: Response;
   try {
-    res = await fetch(bustCache(feedUrl), { headers: noCacheHeaders(), redirect: 'follow', signal: ctrl1.signal });
+    res = await fetch(bustCache(feedUrl), { headers: feedHeaders(), redirect: 'follow', signal: ctrl1.signal });
   } finally { clearTimeout(t1); }
-  if (res.status === 403 || res.status === 415 || res.status === 429) {
+  // Retry once on a Cloudflare bot challenge (403/429), the Sec-Fetch 415, or a
+  // transient gateway error (502/503/504) — a fresh UA + fresh cache key usually clears it.
+  if ([403, 415, 429, 502, 503, 504].includes(res.status)) {
     // Drain body so the connection can be reused.
     try { await res.text(); } catch { /* */ }
     // Wait 15-30 s, then try once more with a fresh UA + fresh cache key.
@@ -104,7 +110,7 @@ async function fetchFeedXml(feedUrl: string): Promise<string> {
     const ctrl2 = new AbortController();
     const t2 = setTimeout(() => ctrl2.abort(), 25_000);
     try {
-      res = await fetch(bustCache(feedUrl), { headers: noCacheHeaders(), redirect: 'follow', signal: ctrl2.signal });
+      res = await fetch(bustCache(feedUrl), { headers: feedHeaders(), redirect: 'follow', signal: ctrl2.signal });
     } finally { clearTimeout(t2); }
   }
   if (!res.ok) throw new Error(`Status code ${res.status}`);
