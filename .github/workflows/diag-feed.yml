@@ -4,19 +4,28 @@ jobs:
   diag:
     runs-on: ubuntu-latest
     steps:
-      - name: probe Splash feed from the GHA runner IP
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - name: run REAL fetchRss on the runner
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: |
-          U="https://splash247.com/feed/"
-          echo "=== runner UTC time ==="; date -u
-          probe () {
-            echo ""; echo "=== $1 ==="
-            curl -s -D /tmp/h.txt -o /tmp/b.xml "${@:2}"
-            grep -iE "^(cf-cache-status|age|last-modified|cf-ray|expires):" /tmp/h.txt || echo "(no cache headers)"
-            echo "HTTP: $(head -1 /tmp/h.txt)"
-            echo "newest pubDate: $(grep -oE '<pubDate>[^<]+' /tmp/b.xml | head -1)"
-            echo "item count: $(grep -c '<item>' /tmp/b.xml)"
-          }
-          probe "plain (browser UA)" -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" "$U"
-          probe "query cache-bust ?_=ts" -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" "$U?_=$(date +%s%3N)"
-          probe "no-cache header" -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" -H "Cache-Control: no-cache" -H "Pragma: no-cache" "$U?_=$(date +%s%3N)7"
-          probe "Pragma+CDN-bypass query" -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" "$U?nocache=$(date +%s%3N)&t=$RANDOM"
+          cat > _diag.ts <<'TS'
+          import { fetchRss } from './lib/scrapers/rss';
+          import { hashUrl } from './lib/scrapers/util';
+          const U=process.env.SUPABASE_URL!, K=process.env.SUPABASE_SERVICE_ROLE_KEY!, H={apikey:K,Authorization:'Bearer '+K};
+          (async()=>{
+            const out = await fetchRss('https://splash247.com/feed/', { skipOgImage: true });
+            console.log('fetchRss items:', out.length, ' newest:', out[0]?.published_at, '|', (out[0]?.title||'').slice(0,45));
+            const id=(await (await fetch(U+'/rest/v1/sources?select=id&name=eq.Splash247',{headers:H})).json())[0].id;
+            for (const a of out.slice(0,5)) {
+              const h=hashUrl(a.url);
+              const rows=await (await fetch(U+'/rest/v1/articles?select=id&source_id=eq.'+id+'&url_hash=eq.'+h,{headers:H})).json();
+              console.log('  '+(a.published_at||'?')+'  inDB='+(rows.length>0)+'  '+a.url);
+            }
+          })().catch(e=>console.log('THREW', e.message));
+          TS
+          npx tsx _diag.ts
