@@ -4,7 +4,7 @@ import { createServiceClient } from '../supabase/server';
 import { summarizeAndCategorize } from '../ai/claude';
 import { categorizeByRules, extractSummary } from '../ai/rules';
 import type { Source, Category } from '../supabase/types';
-import { fetchRss, type RawArticle } from './rss';
+import { fetchRss, fetchWpRest, type RawArticle } from './rss';
 import { fetchHtmlSource, FetchError, type HtmlScraperConfig } from './html';
 import { hashUrl, sleep } from './util';
 import { looksLikeArticle } from './quality';
@@ -58,55 +58,59 @@ function selectActiveConfig(source: Source): HtmlScraperConfig {
 // rather than re-implementing it — a re-implementation diverged and false-flagged
 // healthy sitemap/RSS sources (Gard) as broken. Read-only; no insert side effects.
 export async function fetchRaw(source: Source): Promise<RawArticle[]> {
+  const rawCfg = (source.scraper_config ?? {}) as HtmlScraperConfig & { skip_og_image?: boolean; wp_rest_url?: string; wp_rest_per_page?: number };
+  const all: RawArticle[] = [];
+
   if (source.type === 'rss') {
     if (!source.feed_url) throw new Error('rss source missing feed_url');
-    const rssOpts = (source.scraper_config ?? {}) as { skip_og_image?: boolean };
-    return await fetchRss(source.feed_url, { skipOgImage: !!rssOpts.skip_og_image });
-  }
-  // html / press_release
-  const rawCfg = source.scraper_config as HtmlScraperConfig;
-  const config = selectActiveConfig(source);
-  const hasJob = !!config?.list_url || !!config?.sitemap_url || (config?.jobs && config.jobs.length > 0);
-  const hasFeeds = !!rawCfg?.rss_feeds && rawCfg.rss_feeds.length > 0;
-  if (!hasJob && !hasFeeds) {
-    throw new Error('html source missing scraper_config.list_url, sitemap_url, jobs, job_groups, or rss_feeds');
-  }
-  const sb = createServiceClient();
-  // Fetch ALL known url_hashes for this source, paginated. PostgREST enforces a
-  // server-side max-rows=1000 cap (MEASURED 2026-06-09: even .limit(100000) still
-  // returns only 1000), so a single select gave an INCOMPLETE knownUrls set for
-  // sources with >1000 articles (NorthStandard 1959, West 1708, Britannia 1516, …)
-  // → already-scraped URLs looked "new" → the scraper re-rendered up to max_items
-  // of them (10s each via requires_js) → the 3-min per-source timeout. Page through
-  // in 1000-row windows until a short page signals the end (~2-3 queries even for
-  // the largest source).
-  const knownUrls = new Set<string>();
-  for (let from = 0; ; from += 1000) {
-    const { data: page } = await sb.from('articles').select('url_hash').eq('source_id', source.id).range(from, from + 999);
-    if (!page || page.length === 0) break;
-    for (const r of page as { url_hash: string }[]) knownUrls.add(r.url_hash);
-    if (page.length < 1000) break;
-  }
-
-  const all: RawArticle[] = [];
-  if (hasJob) {
-    const htmlOut = await fetchHtmlSource({ config, delayMs: source.request_delay_ms, knownUrls });
-    all.push(...htmlOut);
-  }
-  // Supplemental RSS/Atom feeds — e.g. a publisher's YouTube channel
-  // alongside its website news. Each feed is independent; one failure
-  // doesn't kill the html job's results. skip_og_image is forced ON
-  // here because YouTube items already have a thumbnail and we don't
-  // want extra Cloudflare-bait fetches.
-  if (hasFeeds) {
-    for (const feed of config.rss_feeds!) {
-      try {
-        const out = await fetchRss(feed, { skipOgImage: true });
-        all.push(...out);
-      } catch (e) {
-        console.error(`supplemental feed failed for ${source.name}: ${feed} — ${e instanceof Error ? e.message : String(e)}`);
+    all.push(...await fetchRss(source.feed_url, { skipOgImage: !!rawCfg.skip_og_image }));
+  } else {
+    // html / press_release
+    const config = selectActiveConfig(source);
+    const hasJob = !!config?.list_url || !!config?.sitemap_url || (config?.jobs && config.jobs.length > 0);
+    const hasFeeds = !!rawCfg?.rss_feeds && rawCfg.rss_feeds.length > 0;
+    if (!hasJob && !hasFeeds && !rawCfg.wp_rest_url) {
+      throw new Error('html source missing scraper_config.list_url, sitemap_url, jobs, job_groups, rss_feeds, or wp_rest_url');
+    }
+    if (hasJob || hasFeeds) {
+      const sb = createServiceClient();
+      // Fetch ALL known url_hashes for this source, paginated. PostgREST enforces a
+      // server-side max-rows=1000 cap (MEASURED 2026-06-09: even .limit(100000) still
+      // returns only 1000), so a single select gave an INCOMPLETE knownUrls set for
+      // sources with >1000 articles (NorthStandard 1959, West 1708, Britannia 1516, …)
+      // → already-scraped URLs looked "new" → the scraper re-rendered up to max_items
+      // of them (10s each via requires_js) → the 3-min per-source timeout. Page through
+      // in 1000-row windows until a short page signals the end (~2-3 queries even for
+      // the largest source).
+      const knownUrls = new Set<string>();
+      for (let from = 0; ; from += 1000) {
+        const { data: page } = await sb.from('articles').select('url_hash').eq('source_id', source.id).range(from, from + 999);
+        if (!page || page.length === 0) break;
+        for (const r of page as { url_hash: string }[]) knownUrls.add(r.url_hash);
+        if (page.length < 1000) break;
+      }
+      if (hasJob) {
+        all.push(...await fetchHtmlSource({ config, delayMs: source.request_delay_ms, knownUrls }));
+      }
+      // Supplemental RSS/Atom feeds — e.g. a publisher's YouTube channel alongside its
+      // website news. Each feed is independent; one failure doesn't kill the html job.
+      if (hasFeeds) {
+        for (const feed of config.rss_feeds!) {
+          try { all.push(...await fetchRss(feed, { skipOgImage: true })); }
+          catch (e) { console.error(`supplemental feed failed for ${source.name}: ${feed} — ${e instanceof Error ? e.message : String(e)}`); }
+        }
       }
     }
+  }
+
+  // ADDITIVE WP REST path (any type) — a DYNAMIC, uncached second source that stays
+  // fresh when a CDN hands the scraper a STALE cached RSS feed (Splash247, 2026-07-17).
+  // Best-effort: an intermittent Cloudflare 403 must NOT kill the primary results, and
+  // url_hash dedup downstream keeps the richer primary copy and only ADDS what the
+  // stale feed missed. Configured per source via scraper_config.wp_rest_url.
+  if (rawCfg.wp_rest_url) {
+    try { all.push(...await fetchWpRest(rawCfg.wp_rest_url, { perPage: rawCfg.wp_rest_per_page })); }
+    catch (e) { console.error(`WP REST failed for ${source.name}: ${rawCfg.wp_rest_url} — ${e instanceof Error ? e.message : String(e)}`); }
   }
   return all;
 }

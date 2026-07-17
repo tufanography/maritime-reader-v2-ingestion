@@ -293,3 +293,71 @@ export async function fetchRss(feedUrl: string, opts: FetchRssOptions = {}): Pro
   }
   return articles;
 }
+
+// Decode the HTML entities WordPress leaves in REST `title.rendered` / `excerpt.rendered`
+// (rss-parser does this for RSS, but we JSON.parse WP REST ourselves). Numeric first so
+// curly quotes / dashes (&#8217; &#8211;) resolve, then the common named ones.
+function decodeEntities(s: string): string {
+  return s
+    .replace(/&#(\d+);/g, (_, n) => { try { return String.fromCodePoint(+n); } catch { return _; } })
+    .replace(/&#x([0-9a-f]+);/gi, (_, n) => { try { return String.fromCodePoint(parseInt(n, 16)); } catch { return _; } })
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"')
+    .replace(/&#0?39;|&apos;/g, "'").replace(/&nbsp;/g, ' ')
+    .replace(/&hellip;/g, '…').replace(/&mdash;/g, '—').replace(/&ndash;/g, '–')
+    .replace(/&amp;/g, '&');
+}
+
+/** Fetch a WordPress REST API posts endpoint (e.g. `<origin>/wp-json/wp/v2/posts`) as
+ *  RawArticles. The REST API is DYNAMIC — not page-cached like `/feed/` — so it stays
+ *  fresh when a CDN hands the scraper (on a datacenter IP) a STALE cached RSS feed
+ *  (MEASURED 2026-07-17: Splash247's /feed/ froze ~18-20h while /wp-json returned the
+ *  live list). Used as an ADDITIVE second path alongside the primary method; url_hash
+ *  dedup keeps the richer primary copy and lets REST fill in what the stale feed missed.
+ *  `date_gmt` is the UTC publish time. Best-effort: throws on non-200 / non-JSON so the
+ *  caller can log-and-continue without killing the primary results. */
+export async function fetchWpRest(baseUrl: string, opts: { perPage?: number } = {}): Promise<RawArticle[]> {
+  const per = Math.min(Math.max(opts.perPage ?? 20, 1), 100);
+  const sep = baseUrl.includes('?') ? '&' : '?';
+  const url = `${baseUrl}${sep}per_page=${per}&orderby=date&_fields=link,date_gmt,title,excerpt`;
+  const doFetch = async (): Promise<Response> => {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 25_000);
+    try {
+      return await fetch(bustCache(url), {
+        headers: { 'User-Agent': randomUserAgent(), Accept: 'application/json', 'Accept-Language': 'en-US,en;q=0.9' },
+        redirect: 'follow',
+        signal: ctrl.signal,
+      });
+    } finally { clearTimeout(timer); }
+  };
+  // Cloudflare intermittently 403s the datacenter IP on Splash-class WAFs (MEASURED
+  // 2026-07-17), and gateways flake 5xx. Retry ONCE with a fresh UA + short wait.
+  let res = await doFetch();
+  if ([403, 429, 502, 503, 504].includes(res.status)) {
+    try { await res.text(); } catch { /* */ }
+    await sleep(5_000 + Math.floor(Math.random() * 5_000));
+    res = await doFetch();
+  }
+  if (!res.ok) throw new Error(`Status code ${res.status}`);
+  let posts: unknown;
+  try { posts = JSON.parse(await res.text()); } catch { throw new Error('WP REST returned non-JSON'); }
+  if (!Array.isArray(posts)) return [];
+  const out: RawArticle[] = [];
+  for (const p of posts as any[]) {
+    const link: string | undefined = p?.link;
+    const title = decodeEntities(stripHtml(String(p?.title?.rendered ?? ''))).trim();
+    if (!link || !title) continue;
+    const gmt = p?.date_gmt ? String(p.date_gmt) : null;
+    out.push({
+      title,
+      url: link,
+      author: null,
+      published_at: gmt ? (/[Zz]$/.test(gmt) ? gmt : gmt + 'Z') : null,
+      excerpt: decodeEntities(stripHtml(String(p?.excerpt?.rendered ?? ''))).trim().slice(0, 500),
+      image_url: null,
+      published_at_source: 'original',
+      published_at_confidence: 'high',
+    });
+  }
+  return out;
+}
