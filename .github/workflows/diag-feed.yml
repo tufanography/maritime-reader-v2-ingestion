@@ -1,0 +1,22 @@
+name: diag-feed
+on: workflow_dispatch
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: probe Splash feed from the GHA runner IP
+        run: |
+          U="https://splash247.com/feed/"
+          echo "=== runner UTC time ==="; date -u
+          probe () {
+            echo ""; echo "=== $1 ==="
+            curl -s -D /tmp/h.txt -o /tmp/b.xml "${@:2}"
+            grep -iE "^(cf-cache-status|age|last-modified|cf-ray|expires):" /tmp/h.txt || echo "(no cache headers)"
+            echo "HTTP: $(head -1 /tmp/h.txt)"
+            echo "newest pubDate: $(grep -oE '<pubDate>[^<]+' /tmp/b.xml | head -1)"
+            echo "item count: $(grep -c '<item>' /tmp/b.xml)"
+          }
+          probe "plain (browser UA)" -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" "$U"
+          probe "query cache-bust ?_=ts" -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" "$U?_=$(date +%s%3N)"
+          probe "no-cache header" -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" -H "Cache-Control: no-cache" -H "Pragma: no-cache" "$U?_=$(date +%s%3N)7"
+          probe "Pragma+CDN-bypass query" -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" "$U?nocache=$(date +%s%3N)&t=$RANDOM"
