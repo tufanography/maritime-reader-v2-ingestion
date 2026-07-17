@@ -8,24 +8,16 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: npm }
       - run: npm ci
-      - name: fetchRss + DB presence on runner
-        env:
-          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      - name: fetchRss 5x rapid — is staleness per-request?
         run: |
           cat > _diag.ts <<'TS'
           import { fetchRss } from './lib/scrapers/rss';
-          import { hashUrl } from './lib/scrapers/util';
-          const U=process.env.NEXT_PUBLIC_SUPABASE_URL!, K=process.env.SUPABASE_SERVICE_ROLE_KEY!, H={apikey:K,Authorization:'Bearer '+K};
           (async()=>{
-            const out = await fetchRss('https://splash247.com/feed/', { skipOgImage: true });
-            console.log('RESULT fetchRss items:', out.length, ' newest:', out[0]?.published_at);
-            const id=(await (await fetch(U+'/rest/v1/sources?select=id&name=eq.Splash247',{headers:H})).json())[0].id;
-            for (const a of out.slice(0,6)) {
-              const h=hashUrl(a.url);
-              const rows=await (await fetch(U+'/rest/v1/articles?select=id&source_id=eq.'+id+'&url_hash=eq.'+h,{headers:H})).json();
-              console.log('RESULT pub='+(a.published_at||'?')+' inDB='+(rows.length>0)+' hash='+h.slice(0,8)+' url='+a.url);
+            for (let i=1;i<=5;i++){
+              try { const out = await fetchRss('https://splash247.com/feed/', { skipOgImage: true });
+                console.log('RESULT try'+i+' newest='+out[0]?.published_at+' top='+(out[0]?.url||'').replace('https://splash247.com/','').slice(0,40));
+              } catch(e:any){ console.log('RESULT try'+i+' THREW '+e.message.slice(0,40)); }
             }
-          })().catch(e=>console.log('RESULT THREW', e.message));
+          })();
           TS
           npx tsx _diag.ts
