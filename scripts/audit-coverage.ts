@@ -246,11 +246,19 @@ function buildBody(report: any[]): string {
     b += `- **${r.name}** — ${r.uncaptured} of ${r.extracted} extracted items are NOT captured (rejected by quality/date gate or new URL pattern):\n`;
     for (const s of (r.sample || [])) b += `    - ${s.title} — ${s.url}\n`;
   }
-  // crit-state marker: lets the NEXT run read how many CRITICAL signals the LAST
-  // write recorded, so email fires only on the 0→N (new break) and N→0 (cleared)
-  // transitions — never on a persisting state (silent body-edit). This closes the
-  // gap source-health has, where a critical that appears on a PATCH run is silent.
-  b += `\nNote: multi-job sources (Steamship/West/etc.) rotate one job-group per run, so a single audit samples one group; coverage flags clear/appear across the rotation. <!-- coverage-audit --><!-- crit-state:${crit.length} -->`;
+  // crit-sources marker: the SET of CRITICAL source names the last write recorded,
+  // so the next run can diff it and email only on what NEWLY entered.
+  //
+  // This replaces a `crit-state:<count>` marker gated on 0→N. That gate was a design
+  // error: it can only fire when the board is completely green first, and a real
+  // system with 55 sources is never completely green. MEASURED 2026-07-27: 11 sources
+  // critical, issue #1 open and updated daily since 2026-06-26, Splash247 72h behind
+  // and Safety4Sea 92h behind — and not one email had ever been sent, because the
+  // count never returned to 0. The monitor was working; nobody was being told.
+  // A set-diff fires on the event that actually matters (a source that was fine is
+  // now broken) and stays quiet on a persisting baseline.
+  const critNames = JSON.stringify(crit.map((r) => r.name).sort());
+  b += `\nNote: multi-job sources (Steamship/West/etc.) rotate one job-group per run, so a single audit samples one group; coverage flags clear/appear across the rotation. <!-- coverage-audit --><!-- crit-sources:${critNames} -->`;
   return b;
 }
 
@@ -273,12 +281,21 @@ async function sendEmail(subject: string, html: string): Promise<void> {
   } catch (e: any) { console.log('  email FAILED', e.message); }
 }
 
-function critHtml(crit: any[]): string {
+const critLi = (r: any) =>
+  `<li><strong>${r.name}</strong> [${(r.flags || []).join(', ')}] — ${r.note ?? `found median ${r.foundMedian}, nothing captured in ${r.daysSinceCapture} day(s)`}</li>`;
+
+// `newly` is what changed since the last audit and leads the mail; `persisting` is
+// the standing baseline, listed after so the new break is never buried in it.
+function critHtml(newly: any[], persisting: any[] = []): string {
+  const UL = 'style="font-family:ui-monospace,monospace;font-size:13px"';
   return `<p><strong>Maritime Reader — coverage audit</strong></p>` +
-    `<p>${crit.length} source/site issue(s) need attention:</p>` +
-    `<ul style="font-family:ui-monospace,monospace;font-size:13px">` +
-    crit.map((r) => `<li><strong>${r.name}</strong> [${(r.flags || []).join(', ')}] — ${r.note ?? `found median ${r.foundMedian}, nothing captured in ${r.daysSinceCapture} day(s)`}</li>`).join('') +
-    `</ul><p style="color:#666;font-size:12px">Full detail (chronic rejections + coverage gaps) is in the GitHub coverage-audit issue. ${new Date().toISOString()}</p>`;
+    `<p>${newly.length} source(s) newly broken since the last audit:</p>` +
+    `<ul ${UL}>` + newly.map(critLi).join('') + `</ul>` +
+    (persisting.length
+      ? `<p style="color:#666">Still broken from before (${persisting.length}, already reported):</p>` +
+        `<ul ${UL} >` + persisting.map(critLi).join('') + `</ul>`
+      : '') +
+    `<p style="color:#666;font-size:12px">Full detail (chronic rejections + coverage gaps) is in the GitHub coverage-audit issue. ${new Date().toISOString()}</p>`;
 }
 
 async function postIssue(report: any[]) {
@@ -290,10 +307,20 @@ async function postIssue(report: any[]) {
   const open = Array.isArray(existing) ? existing[0] : null;
   const critRows = report.filter((r) => (r.flags || []).some((f: string) => CRITICAL.has(f)));
   const critCount = critRows.length;
-  // Prior CRITICAL count, read from the marker the LAST write embedded. Email is
-  // gated on this so it fires only on transitions, never on a persisting state.
-  const priorMatch = (open?.body || '').match(/<!-- crit-state:(\d+) -->/);
-  const priorCrit = priorMatch ? +priorMatch[1] : 0;
+  // Prior CRITICAL source SET, read from the marker the LAST write embedded, so we
+  // can diff instead of counting. Falls back to the legacy crit-state:<count> marker
+  // for the first run after this change: an unknown prior set means every current
+  // critical reads as "newly entered" and one catch-up email goes out — which is the
+  // right behaviour, since the 0→N gate meant they were never reported at all.
+  const setMatch = (open?.body || '').match(/<!-- crit-sources:(\[.*?\]) -->/);
+  let priorNames: string[] | null = null;
+  if (setMatch) { try { priorNames = JSON.parse(setMatch[1]); } catch { priorNames = null; } }
+  const priorSet = new Set(priorNames ?? []);
+  const priorCrit = priorNames ? priorNames.length : (+(((open?.body || '').match(/<!-- crit-state:(\d+) -->/) || [])[1] ?? 0));
+
+  const newlyBroken = critRows.filter((r) => !priorSet.has(r.name));
+  const persisting = critRows.filter((r) => priorSet.has(r.name));
+  const recovered = [...priorSet].filter((n) => !critRows.some((r) => r.name === n));
 
   if (!flagged.length) {
     if (open) {
@@ -310,14 +337,21 @@ async function postIssue(report: any[]) {
   if (open) { await gh(`issues/${open.number}`, { method: 'PATCH', body: JSON.stringify({ title, body, state: 'open' }) }); console.log(`updated audit issue #${open.number}`); }
   else { const r = await (await gh(`issues`, { method: 'POST', body: JSON.stringify({ title, body, labels: ['coverage-audit'] }) })).json(); console.log(`opened audit issue #${r.number}`); }
 
-  // Transition email — CRITICAL only, so the standing chronic/gap baseline never floods:
-  //   0 → N : a source newly broke or the site went stale → ping with the hard list.
-  //   N → 0 : criticals cleared but the issue stays open for gaps → ping "cleared".
-  // Persisting N → N (or gaps-only 0 → 0) sends nothing.
-  if (critCount > 0 && priorCrit === 0) {
-    await sendEmail(`🔴 Maritime Reader: ${critCount} source/site issue(s) need attention`, critHtml(critRows));
+  // Delta email — fires on what CHANGED, not on how many are broken:
+  //   newly entered → ping, listing the new breaks first and the standing ones after.
+  //   all cleared   → ping "cleared".
+  // A source that was already critical yesterday sends nothing today, so the standing
+  // baseline (dark P&I clubs, chronic rejections) stays in the issue and out of the
+  // inbox — while a source that breaks TODAY is reported the same day.
+  if (newlyBroken.length) {
+    const subj = newlyBroken.length === 1
+      ? `🔴 Maritime Reader: ${newlyBroken[0].name} just broke`
+      : `🔴 Maritime Reader: ${newlyBroken.length} sources just broke`;
+    await sendEmail(subj, critHtml(newlyBroken, persisting));
   } else if (critCount === 0 && priorCrit > 0) {
-    await sendEmail('✅ Maritime Reader: critical coverage issues cleared', '<p>The critical source/site issues have cleared (coverage gaps may remain — tracked in the GitHub issue).</p>');
+    await sendEmail('✅ Maritime Reader: critical coverage issues cleared',
+      `<p>The critical source/site issues have cleared (coverage gaps may remain — tracked in the GitHub issue).</p>` +
+      (recovered.length ? `<p>Recovered: ${recovered.join(', ')}</p>` : ''));
   }
 }
 
