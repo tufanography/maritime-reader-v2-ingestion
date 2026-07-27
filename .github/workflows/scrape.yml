@@ -32,7 +32,10 @@ jobs:
     # class) stale. Public repo → GHA minutes are unlimited, so the longer cap is
     # free and lets a run actually finish. Per-source timeouts still bound any
     # single hung source. (2026-06-29)
-    timeout-minutes: 45
+    # 60 not 45: the per-source cap went 3m -> 6m (orchestrator.ts), so a run where
+    # several slow sources all time out can cost ~30 min more than before. Runs
+    # currently finish in 4-19 min, so this is headroom, not an expected duration.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

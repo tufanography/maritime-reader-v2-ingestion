@@ -468,7 +468,13 @@ async function notifyStuckScrapes(stuck: StuckScrape[]): Promise<void> {
 // or a runaway pagination loop; cutting it lets the orchestrator move
 // on to the rest. The source's last_status gets stamped to 'error' so
 // the next cron tick still picks it up after its normal interval.
-const PER_SOURCE_TIMEOUT_MS = 3 * 60_000;
+// 6m, raised from 3m on 2026-07-27. At 3m the cap was not catching stuck fetches,
+// it was cutting off sources that legitimately need the time: Britannia (7 job
+// groups, many PDFs) timed out on 7 of 12 runs and had gone 8 days without an
+// article, Japan P&I on 3 of 12, Panama Canal on 8 of 23. MEASURED over 7 days:
+// 24 timeouts in 1,182 runs across 5 sources, and full scrape runs finish in
+// 4-19 min against a 60-min job cap — so the headroom is there.
+const PER_SOURCE_TIMEOUT_MS = 6 * 60_000;
 
 async function scrapeWithTimeout(source: Source): Promise<ScrapeResult> {
   let timer: ReturnType<typeof setTimeout> | null = null;
