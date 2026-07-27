@@ -82,11 +82,36 @@ export async function fetchRaw(source: Source): Promise<RawArticle[]> {
       // of them (10s each via requires_js) → the 3-min per-source timeout. Page through
       // in 1000-row windows until a short page signals the end (~2-3 queries even for
       // the largest source).
+      // KEYSET, not offset. `.range()` without an ORDER BY gives PostgreSQL no
+      // stable row order, so successive pages can repeat rows and skip others —
+      // the set comes back INCOMPLETE and non-deterministically so. PROVEN here
+      // 2026-07-27: the same offset loop over this table returned 1,362 / 1,583 /
+      // 1,421 / 1,537 rows on consecutive runs; adding .order() on a non-unique
+      // column did not fix it (363 / 0 / 1,084); keyset on a unique column
+      // returned exactly 66,014 three times running.
+      //
+      // Impact of the old loop was SPEED, not corruption — MEASURED: zero
+      // duplicate url_hash across all 66,014 rows, because the authoritative
+      // dedup is the .in(url_hash) query in scrapeSource below, which does not
+      // paginate. A short knownUrls set only means html.ts re-fetches detail
+      // pages it already had (10s each on requires_js sources), which is what
+      // pushed heavy sources into the per-source timeout.
       const knownUrls = new Set<string>();
-      for (let from = 0; ; from += 1000) {
-        const { data: page } = await sb.from('articles').select('url_hash').eq('source_id', source.id).range(from, from + 999);
+      let cursor = '00000000-0000-0000-0000-000000000000';
+      for (;;) {
+        const { data: page, error } = await sb
+          .from('articles')
+          .select('id, url_hash')
+          .eq('source_id', source.id)
+          .gt('id', cursor)
+          .order('id', { ascending: true })
+          .limit(1000);
+        // Do NOT swallow this: an empty knownUrls set looks exactly like "new
+        // source with no history" and silently triggers a full re-fetch.
+        if (error) { console.error(`knownUrls page failed for ${source.name}: ${error.message}`); break; }
         if (!page || page.length === 0) break;
-        for (const r of page as { url_hash: string }[]) knownUrls.add(r.url_hash);
+        for (const r of page as { id: string; url_hash: string }[]) knownUrls.add(r.url_hash);
+        cursor = (page[page.length - 1] as { id: string }).id;
         if (page.length < 1000) break;
       }
       if (hasJob) {
@@ -161,13 +186,38 @@ export async function scrapeSource(source: Source): Promise<ScrapeResult> {
     };
   }
 
-  // Dedupe against existing rows
+  // Dedupe against existing rows. This query is AUTHORITATIVE — everything the
+  // scraper inserts depends on it — so it is chunked and its error is fatal.
+  //
+  // Two faults it used to have:
+  //   1. one unbounded .in(...) call. The hash list rides in the request URL and
+  //      Supabase caps that around 16 KB, i.e. ~400 32-char hashes (already known
+  //      in SupabaseArticleWriteRepository, which chunks at 200 — that knowledge
+  //      just never reached here). Splash247 and The Maritime Executive carry
+  //      max_items: 1000.
+  //   2. the error was never read. A failed query left `existing` undefined,
+  //      which reads as "nothing is known yet" — so a header-limit error would
+  //      have re-inserted the ENTIRE feed rather than skipping one run.
   const hashes = raws.map((r) => ({ raw: r, hash: hashUrl(r.url) }));
-  const allHashes = hashes.map((h) => h.hash);
-  const { data: existing } = allHashes.length
-    ? await sb.from('articles').select('url_hash').in('url_hash', allHashes)
-    : { data: [] as { url_hash: string }[] };
-  const existingSet = new Set((existing ?? []).map((e) => e.url_hash));
+  const existingSet = new Set<string>();
+  for (let i = 0; i < hashes.length; i += 200) {
+    const chunk = hashes.slice(i, i + 200).map((h) => h.hash);
+    const { data, error } = await sb.from('articles').select('url_hash').in('url_hash', chunk);
+    if (error) {
+      // We cannot tell what we already hold, so we insert nothing. Losing one
+      // run is cheap; duplicating a whole feed is not.
+      const msg = `dedup query failed: ${error.message}`;
+      await finishLog({ status: 'error', error_message: msg });
+      await sb.from('sources').update({
+        last_scraped_at: new Date().toISOString(),
+        last_status: 'error',
+        last_error: msg,
+        last_group_index: (source.last_group_index ?? 0) + 1,
+      }).eq('id', source.id);
+      return { source_id: source.id, source_name: source.name, status: 'error', found: raws.length, inserted: 0, error: msg };
+    }
+    for (const r of (data ?? []) as { url_hash: string }[]) existingSet.add(r.url_hash);
+  }
   const fresh = hashes.filter((h) => !existingSet.has(h.hash));
 
   // Categories lookup
