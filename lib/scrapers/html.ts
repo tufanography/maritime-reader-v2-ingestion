@@ -797,7 +797,12 @@ export async function fetchHtmlSource(args: {
 
   async function fetchDetail(link: string, linkText: string, allowHub: boolean): Promise<FetchedDetail> {
     try {
-      await sleep(delayMs + Math.floor(Math.random() * 2000));
+      // Jitter halved (2000 -> 1000). MEASURED 2026-07-27: this line is where the
+      // per-source timeouts come from — nearly all of a slow source's runtime is
+      // sleeping here, not fetching. Shipowners' Club spent ~300s of its 493s run
+      // on jitter alone (119 items x ~2.5s). With delayMs already at 1500-4000ms
+      // per source, a 0-1000ms jitter is still polite spacing.
+      await sleep(delayMs + Math.floor(Math.random() * 1000));
 
       // PDF detection: filename extension first (cheap), HEAD-sniff if the
       // URL doesn't look like a PDF (Tokyo MOU serves PDFs from URLs ending
