@@ -1,0 +1,52 @@
+# TEMPORARY. Answers ONE question: what does Splash247 look like from a GitHub
+# Actions runner IP, versus from a home IP? The scraper reports "success, found=10,
+# new=0" while every one of the feed's live items is missing from our DB, and the
+# WP REST fallback 403s from a home IP. Delete once answered.
+name: diag-feed
+on: workflow_dispatch
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - name: runner egress IP
+        run: curl -s https://ifconfig.me; echo
+      - name: raw feed — with and without cache-buster, 3x each
+        run: |
+          cat > _diag.mjs <<'JS'
+          const UA='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36';
+          const H={'User-Agent':UA,'Accept':'application/rss+xml, application/xml, text/xml, application/atom+xml, */*;q=0.8','Accept-Language':'en-US,en;q=0.9'};
+          const probe=async(label,u)=>{
+            try{
+              const r=await fetch(u,{headers:H,redirect:'follow'});
+              const t=await r.text();
+              const dates=[...t.matchAll(/<pubDate>([^<]+)<\/pubDate>/g)].map(m=>m[1]);
+              const cf=r.headers.get('cf-ray')?'cf':'-';
+              console.log(`RESULT ${label} status=${r.status} len=${t.length} items=${(t.match(/<item>/g)||[]).length} newest=${dates[0]||'-'} ${cf} ct=${r.headers.get('content-type')}`);
+              if(r.status!==200) console.log('   body: '+t.slice(0,160).replace(/\s+/g,' '));
+            }catch(e){ console.log(`RESULT ${label} THREW ${e.message.slice(0,60)}`); }
+          };
+          for(let i=1;i<=3;i++){
+            await probe(`rss-bust#${i}`,'https://splash247.com/feed/?_='+Date.now());
+            await probe(`rss-clean#${i}`,'https://splash247.com/feed/');
+          }
+          await probe('wp-rest','https://splash247.com/wp-json/wp/v2/posts?per_page=5');
+          await probe('sitemap','https://splash247.com/sitemap.xml');
+          JS
+          node _diag.mjs
+      - name: production fetchRss path, 3x
+        run: |
+          cat > _diag2.ts <<'TS'
+          import { fetchRss } from './lib/scrapers/rss';
+          (async()=>{
+            for (let i=1;i<=3;i++){
+              try { const out = await fetchRss('https://splash247.com/feed/', { skipOgImage: true });
+                console.log(`RESULT fetchRss#${i} n=${out.length} newest=${out[0]?.published_at} top=${(out[0]?.url||'').replace('https://splash247.com/','').slice(0,45)}`);
+              } catch(e:any){ console.log(`RESULT fetchRss#${i} THREW ${e.message.slice(0,60)}`); }
+            }
+          })();
+          TS
+          npx tsx _diag2.ts
