@@ -22,8 +22,21 @@ export function hashUrl(url: string): string {
       'utm_content',
       'fbclid',
       'gclid',
+      // Kept in lockstep with v1's util.ts hashUrl (see header note) — these two
+      // were added there after real duplicate incidents and were MISSING here:
+      //   'redirect' — Britannia links the same article ±?redirect= (2026-06-29)
+      //   '_'        — our own feed cache-buster, echoed back by MarineLink's
+      //                RSS onto every item link (2026-07-16..27, 710 rows)
+      'redirect',
+      '_',
     ]) {
       u.searchParams.delete(k);
+    }
+    // Drop ANY empty-valued param ("?redirect=", "?ref=") — an empty value never
+    // changes which article a URL points to but does change the raw string.
+    // (Also present in v1's util.ts; this copy had drifted.)
+    for (const k of [...u.searchParams.keys()]) {
+      if (u.searchParams.get(k) === '') u.searchParams.delete(k);
     }
     u.hash = '';
     cleaned = u.toString().replace(/\/$/, '');

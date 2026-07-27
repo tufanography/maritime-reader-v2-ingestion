@@ -84,8 +84,32 @@ function feedHeaders(): Record<string, string> {
 // from a clean IP returned the fresh items (MEASURED 2026-07-16). A fresh cache key per
 // request forces the origin copy; the no-cache request headers reinforce it. Harmless
 // for feeds that aren't cached (WordPress ignores the unknown param).
+// The param name is a CONSTANT, not a literal, because we have to remove it again
+// further down: MarineLink's RSS echoes the REQUEST query string into every
+// <link> it emits, so `?_=<ts>` leaks from the feed request onto each article
+// URL. A fresh timestamp every run then produced a fresh url_hash every run, and
+// dedup saw each re-fetch as a brand-new article — 710 duplicate rows for
+// MarineLink alone between 2026-07-16 and 2026-07-27 (~70/day, still growing
+// when found). Whatever we ADD to the request, we must STRIP from the items.
+const CACHE_BUST_PARAM = '_';
+
 function bustCache(url: string): string {
-  return url + (url.includes('?') ? '&' : '?') + '_=' + Date.now();
+  return url + (url.includes('?') ? '&' : '?') + CACHE_BUST_PARAM + '=' + Date.now();
+}
+
+/** Remove OUR cache-buster from a URL a feed handed back. Scoped deliberately to
+ *  the param we inject — this is "clean up after ourselves", not a general URL
+ *  canonicalizer. Publisher-meaningful params (?id=, ?p=) are left untouched;
+ *  hashUrl() in util.ts is the second line of defence. */
+export function stripCacheBust(url: string): string {
+  try {
+    const u = new URL(url);
+    if (!u.searchParams.has(CACHE_BUST_PARAM)) return url;
+    u.searchParams.delete(CACHE_BUST_PARAM);
+    return u.toString().replace(/\?$/, '');
+  } catch {
+    return url;
+  }
 }
 
 async function fetchFeedXml(feedUrl: string): Promise<string> {
@@ -273,7 +297,10 @@ export async function fetchRss(feedUrl: string, opts: FetchRssOptions = {}): Pro
       const pubDate = it.isoDate ?? it.pubDate ?? null;
       return {
         title: it.title!.trim(),
-        url: it.link!.trim(),
+        // stripCacheBust: MarineLink echoes our `?_=<ts>` request param into
+        // every item <link>. Strip it here so the URL we store/hash is the
+        // publisher's real article URL.
+        url: stripCacheBust(it.link!.trim()),
         author: it.creator ?? (it as { author?: string }).author ?? null,
         published_at: pubDate,
         published_at_source: pubDate ? 'original' : null,
@@ -350,7 +377,7 @@ export async function fetchWpRest(baseUrl: string, opts: { perPage?: number } = 
     const gmt = p?.date_gmt ? String(p.date_gmt) : null;
     out.push({
       title,
-      url: link,
+      url: stripCacheBust(link),
       author: null,
       published_at: gmt ? (/[Zz]$/.test(gmt) ? gmt : gmt + 'Z') : null,
       excerpt: decodeEntities(stripHtml(String(p?.excerpt?.rendered ?? ''))).trim().slice(0, 500),

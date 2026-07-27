@@ -9,7 +9,13 @@ export function hashUrl(url: string): string {
     // `redirect` (Britannia links the same article with and without `?redirect=`)
     // was creating DUPLICATE rows — one url_hash per variant — so the same
     // article showed twice in feeds and source-filtered views (2026-06-29).
-    ['utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content', 'fbclid', 'gclid', 'redirect'].forEach(
+    // `_` is the jQuery-convention cache-buster THIS SCRAPER injects into feed
+    // requests (rss.ts bustCache). MarineLink's RSS echoes the request query
+    // string onto every item <link>, so a fresh `?_=<ts>` per run produced a
+    // fresh url_hash per run — 710 duplicate MarineLink rows, 2026-07-16..27.
+    // rss.ts strips it at the source; this is the second line of defence, and
+    // it also covers any other feed that starts echoing it.
+    ['utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content', 'fbclid', 'gclid', 'redirect', '_'].forEach(
       (k) => u.searchParams.delete(k),
     );
     // Also drop ANY empty-valued param ("?redirect=", "?ref=") — an empty value
