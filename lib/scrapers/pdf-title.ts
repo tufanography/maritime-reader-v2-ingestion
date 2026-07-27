@@ -54,9 +54,38 @@ export function tidyTitle(s: string | null | undefined): string {
   return (s ?? '').replace(EXPORT_PREFIX, '').replace(/\s+/g, ' ').trim();
 }
 
+/** Magazine page furniture — a running header repeated down the page, usually
+ *  glued to a page number. Britannia's Crew Watch is split into per-section
+ *  records, and the section headings came out as:
+ *      "CREW WATCH | 7 CREW WATCH A thorough risk assessme…"
+ *      "8 | CREW WATCH CREW WATCH JOBIN MATHEW, ASSISTANT…"
+ *      "12 | CREW WATCHCREW WATCH | 13 CREW WATCH These ta…"
+ *  These pass every other test here — long enough, several words, no template
+ *  name — so they need their own signal: a page-number separator AND a repeated
+ *  multi-word phrase. Requiring both keeps real headlines safe ("CREW WATCH –
+ *  JUNE 2026 – JAPANESE" has no page number and no repeat). */
+function looksLikeRunningHeader(s: string): boolean {
+  const pageMarks = (s.match(/(?:(?:^|\s)\d{1,3}\s*\|)|(?:\|\s*\d{1,3}(?:\s|$))/g) ?? []).length;
+  // Two page markers in one heading means the extractor ran two pages together
+  // ("12 | CREW WATCHCREW WATCH | 13 CREW WATCH"). No real headline does this,
+  // and the words there are glued ("WATCHCREW"), so the repeat test below misses
+  // it — this catches it on its own.
+  if (pageMarks >= 2) return true;
+  if (pageMarks === 0) return false;
+  const words = s.toUpperCase().replace(/[^A-Z ]+/g, ' ').split(/\s+/).filter(Boolean);
+  const seen = new Set<string>();
+  for (let i = 0; i + 2 <= words.length; i++) {
+    const pair = words[i] + ' ' + words[i + 1];
+    if (seen.has(pair)) return true;
+    seen.add(pair);
+  }
+  return false;
+}
+
 /** Would this string mislead a reader if shown as a headline? */
 export function isUsableTitle(raw: string | null | undefined): boolean {
   const s = tidyTitle(raw);
+  if (looksLikeRunningHeader(s)) return false;
   if (s.length < 12) return false;        // "abc", "Layout 1", "PDF"
   if (FILE_ARTEFACT.test(s)) return false;
   if (!/[a-z]/i.test(s)) return false;    // no letters at all

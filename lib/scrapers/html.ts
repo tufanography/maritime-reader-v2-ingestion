@@ -845,8 +845,23 @@ export async function fetchHtmlSource(args: {
             });
           }
           if (sections.length > 1) {
-            const articles: RawArticle[] = sections.map((s, i) => ({
-              title: s.title,
+            // Section headings are lifted from the PDF's own text, so they carry
+            // magazine page furniture the same way pdf.info.Title carries template
+            // names. MEASURED 2026-07-27: Britannia's Crew Watch produced rows
+            // titled "CREW WATCH | 7 CREW WATCH A thorough risk assessme" and
+            // "12 | CREW WATCHCREW WATCH | 13 CREW WATCH These ta". Run every
+            // heading through the same filter, using the section's own opening
+            // sentence as the fallback.
+            const titled = sections.map((s, i) => ({ s, i, t: pickPdfTitle(s.title, null, s.snippet) }));
+            const usable = titled.filter((x) => x.t);
+            // If half or more of the headings are page furniture, the SPLIT itself
+            // is untrustworthy — better one whole-PDF article than a scatter of
+            // mislabelled fragments. Fall through to the single-article path.
+            if (usable.length < 2 || usable.length * 2 < sections.length) {
+              console.warn(`  pdf_split_untrusted: ${link} (${usable.length}/${sections.length} section headings usable) — ingesting whole PDF instead`);
+            } else {
+            const articles: RawArticle[] = usable.map(({ s, i, t }) => ({
+              title: t!,
               // Same PDF as target, but a `?part=N` query keeps each
               // section's url_hash unique (the hashUrl util preserves
               // non-tracking query params). Browser/PDF viewers ignore
@@ -862,6 +877,7 @@ export async function fetchHtmlSource(args: {
               image_url: null,
             }));
             return { kind: 'articles', articles };
+            }
           }
         }
 
