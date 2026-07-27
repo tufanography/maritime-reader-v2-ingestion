@@ -176,7 +176,12 @@ export async function scrapeSource(source: Source): Promise<ScrapeResult> {
 
   let inserted = 0;
   let aiErrors = 0;
-  let rejected = 0;
+  // Split counters: a no-date drop is NOT a quality drop. Both used to land under
+  // one "rejected by quality filter" label, which sends diagnosis to the wrong
+  // place — Bureau Veritas logged "450 rejected by quality filter" over 14 days
+  // while ALL 9 of its live items were failing the DATE gate (MEASURED 2026-07-27).
+  let rejectedQuality = 0;
+  let rejectedNoDate = 0;
 
   // require_date is now ON BY DEFAULT for every source. Articles whose
   // published_at couldn't be resolved float to the top under created_at
@@ -194,7 +199,7 @@ export async function scrapeSource(source: Source): Promise<ScrapeResult> {
     // sources (ABS "Rules and Guides", LR "Stay alert" sign-up, etc.).
     const verdict = looksLikeArticle({ title: raw.title, excerpt: raw.excerpt, url: raw.url });
     if (!verdict.ok) {
-      rejected++;
+      rejectedQuality++;
       continue;
     }
     if (!raw.published_at) {
@@ -223,14 +228,14 @@ export async function scrapeSource(source: Source): Promise<ScrapeResult> {
           // No month+year anywhere → we have zero date signal. Do NOT stamp it
           // with "today" (the old behaviour that surfaced dateless decades-old
           // circulars as fresh). Drop it instead — honest over complete.
-          rejected++;
+          rejectedNoDate++;
           continue;
         }
         raw.published_at = fb.iso;
         raw.published_at_source = 'scraper_default';
         raw.published_at_confidence = 'low';
       } else if (requireDate) {
-        rejected++;
+        rejectedNoDate++;
         continue;
       }
     }
@@ -366,7 +371,8 @@ export async function scrapeSource(source: Source): Promise<ScrapeResult> {
   const status: ScrapeResult['status'] = aiErrors > 0 && inserted > 0 ? 'partial' : 'success';
   const errorParts: string[] = [];
   if (aiErrors > 0) errorParts.push(`${aiErrors} ai failures`);
-  if (rejected > 0) errorParts.push(`${rejected} rejected by quality filter`);
+  if (rejectedQuality > 0) errorParts.push(`${rejectedQuality} rejected by quality filter`);
+  if (rejectedNoDate > 0) errorParts.push(`${rejectedNoDate} rejected: no usable date`);
   await finishLog({
     status,
     articles_found: raws.length,

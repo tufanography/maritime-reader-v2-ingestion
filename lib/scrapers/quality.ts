@@ -141,15 +141,32 @@ export function looksLikeArticle(args: { title: string; excerpt: string; url?: s
     if (pat.test(excerpt)) return { ok: false, reason: `excerpt matches locked-content pattern ${pat}` };
   }
 
-  // JUNK_EXCERPT_PHRASES catch pure CTA / sign-up landing pages where the
-  // entire body is chrome. But the same phrases ("Sign up for alerts")
-  // also appear once in real articles' template chrome — Shipowners' Club
-  // puts that line above every article. Only fire when the excerpt is
-  // short enough that the JUNK phrase dominates; long excerpts fall back
-  // to the CTA-density check below.
-  if (excerpt.length < 600) {
-    for (const pat of JUNK_EXCERPT_PHRASES) {
-      if (pat.test(excerpt)) return { ok: false, reason: `excerpt matches junk phrase ${pat}` };
+  // JUNK_EXCERPT_PHRASES catch pure CTA / sign-up landing pages where the entire
+  // body is chrome. The same phrases also appear ONCE in real articles' template
+  // chrome — Shipowners' Club renders "Sign up for alerts" between the headline
+  // and the body of every article.
+  //
+  // This used to be gated on `excerpt.length < 600`, i.e. "a real article is
+  // long". That assumption fails exactly where it matters: Shipowners' article
+  // pages run 331-507 chars because the substance is in the attached PDF and the
+  // page carries only a summary. MEASURED 2026-07-27: one run found 119 items, 85
+  // new, and rejected 65 of them here — AGM and EGM minutes from 2023-2026, all
+  // genuine club documents.
+  //
+  // Ask the question that actually separates the two cases: once the junk phrase
+  // is removed, is there still prose left? "…Sign up for alerts MINUTES of the
+  // Annual General Meeting of the Members…" leaves 313 chars of minutes behind.
+  // A real sign-up landing page leaves almost nothing.
+  for (const pat of JUNK_EXCERPT_PHRASES) {
+    if (!pat.test(excerpt)) continue;
+    // 100, not 200: MEASURED on real bodies, a pure CTA page leaves 14-41 chars
+    // behind while a genuine short circular leaves 158+ ("…the Panama Canal
+    // Authority has revised transit booking rules effective 1 August 2026…").
+    // A 200 threshold was still rejecting that circular. Bodies below ~100 chars
+    // are caught by the short-excerpt rule above anyway.
+    const remaining = excerpt.replace(pat, ' ').replace(/\s+/g, ' ').trim();
+    if (remaining.length < 100) {
+      return { ok: false, reason: `excerpt is mostly junk phrase ${pat} (${remaining.length}c left)` };
     }
   }
 
