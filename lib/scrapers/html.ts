@@ -14,6 +14,7 @@ import * as cheerio from 'cheerio';
 import { hashUrl, randomUserAgent, sleep, stripHtml } from './util';
 import { tryParse, extractFirstDate, findAllDates, pickBestDate, type DateCandidate, type DateResolution } from './date';
 import { isPdfUrl, extractPdf } from './pdf';
+import { pickPdfTitle } from './pdf-title';
 import { looksLikeArticle, looksLikeHub } from './quality';
 import { extractPdfSections, extractPdfSectionsAi } from '../ai/pdf-sections';
 import type { RawArticle } from './rss';
@@ -809,8 +810,20 @@ export async function fetchHtmlSource(args: {
       if (isPdf) {
         const pdf = await extractPdf(link);
         if (!pdf) return null;
-        const title = pdf.title ?? linkText;
-        if (!title) return null;
+        // NOT `pdf.title ?? linkText`: a PDF's Title field is usually the design
+        // template's name, and every circular exported from that file inherits it
+        // (596 Panama Canal rows titled "May 4, 2007", 131 Britannia rows titled
+        // "master template"). pickPdfTitle filters both candidates and prefers the
+        // human-written anchor text. See pdf-title.ts for the measurements.
+        const title = pickPdfTitle(pdf.title, linkText, pdf.excerpt);
+        if (!title) {
+          // LOUD, not silent: every candidate was junk (template name, bare date,
+          // "Download pdf"). Dropping is correct — publishing "Download pdf" as a
+          // headline is worse — but a drop with no trace is how the PDF outage
+          // went unnoticed for 39 days. Leave a line.
+          console.warn(`  pdf_no_usable_title: ${link} (meta="${pdf.title ?? ''}" link="${linkText ?? ''}")`);
+          return null;
+        }
 
         // Optional: split a multi-article PDF into per-section records.
         // Heuristic (free) by default — looks for sequential numbered
