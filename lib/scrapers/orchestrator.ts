@@ -81,16 +81,24 @@ export async function fetchRaw(source: Source): Promise<RawArticle[]> {
       // look new, so html.ts re-fetches detail pages it already had (10s each on
       // requires_js sources), which is what pushed heavy sources into the timeout.
       //
-      // KEYSET, not offset. `.range()` with no ORDER BY leaves PostgreSQL free to
-      // return rows in any order, so pages can repeat rows and skip others.
-      // MEASURED 2026-07-27 on this table, three consecutive runs each:
-      //   offset, no ORDER BY        → 1,362 / 1,583 / 1,421   (unstable)
-      //   ORDER BY a non-unique col  →   363 /     0 / 1,084   (worse)
-      //   keyset on created_at       → 66,014 each time, but created_at is NOT
-      //                                unique, so ties can still skip a row
-      //   keyset on id (primary key) → 66,050 = exact table count
-      // Hence: keyset on the primary key. The created_at variant happened to come
-      // out whole; that was luck, not design.
+      // KEYSET, not offset — for TWO separate reasons, both measured here.
+      //
+      // 1. Correctness. `.range()` with no ORDER BY lets PostgreSQL return rows
+      //    in any order, so pages can repeat rows and skip others. Three
+      //    consecutive runs over this table: 1,362 / 1,583 / 1,421.
+      //
+      // 2. Deep offsets time out. `.range(45000, 45999)` makes PostgreSQL walk
+      //    46,000 rows and discard 45,000 of them, and the cost grows with depth.
+      //    MEASURED 2026-07-28, ORDER BY id (unique) + range, three runs:
+      //        66,145 / 66,145 / 45,000 + "canceling statement due to statement
+      //        timeout" at offset 45,000
+      //    So ordering was never the problem in this variant — depth was. An
+      //    earlier note here blamed a "non-unique column"; that was wrong, and
+      //    the scripts that produced 363 / 0 / 1,084 were simply not reading
+      //    `error`, so a timeout looked like "no more rows".
+      //
+      // Keyset avoids both: every page seeks straight into the index. Cost is
+      // flat regardless of depth, and the order is total because id is unique.
       //
       // Impact of the old loop was SPEED, not corruption — a hypothesis that
       // duplicates were leaking through was TESTED AND REFUTED: zero repeated
