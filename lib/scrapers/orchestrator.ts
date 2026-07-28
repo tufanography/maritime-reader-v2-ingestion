@@ -74,28 +74,28 @@ export async function fetchRaw(source: Source): Promise<RawArticle[]> {
     }
     if (hasJob || hasFeeds) {
       const sb = createServiceClient();
-      // Fetch ALL known url_hashes for this source, paginated. PostgREST enforces a
-      // server-side max-rows=1000 cap (MEASURED 2026-06-09: even .limit(100000) still
-      // returns only 1000), so a single select gave an INCOMPLETE knownUrls set for
-      // sources with >1000 articles (NorthStandard 1959, West 1708, Britannia 1516, …)
-      // → already-scraped URLs looked "new" → the scraper re-rendered up to max_items
-      // of them (10s each via requires_js) → the 3-min per-source timeout. Page through
-      // in 1000-row windows until a short page signals the end (~2-3 queries even for
-      // the largest source).
-      // KEYSET, not offset. `.range()` without an ORDER BY gives PostgreSQL no
-      // stable row order, so successive pages can repeat rows and skip others —
-      // the set comes back INCOMPLETE and non-deterministically so. PROVEN here
-      // 2026-07-27: the same offset loop over this table returned 1,362 / 1,583 /
-      // 1,421 / 1,537 rows on consecutive runs; adding .order() on a non-unique
-      // column did not fix it (363 / 0 / 1,084); keyset on a unique column
-      // returned exactly 66,014 three times running.
+      // Fetch ALL known url_hashes for this source. PostgREST caps a single select
+      // at 1000 rows (MEASURED 2026-06-09: even .limit(100000) returns 1000), so
+      // sources with >1000 articles (NorthStandard 2039, West 1810, Britannia 1516…)
+      // need paging or the set is short — and a short set makes already-scraped URLs
+      // look new, so html.ts re-fetches detail pages it already had (10s each on
+      // requires_js sources), which is what pushed heavy sources into the timeout.
       //
-      // Impact of the old loop was SPEED, not corruption — MEASURED: zero
-      // duplicate url_hash across all 66,014 rows, because the authoritative
-      // dedup is the .in(url_hash) query in scrapeSource below, which does not
-      // paginate. A short knownUrls set only means html.ts re-fetches detail
-      // pages it already had (10s each on requires_js sources), which is what
-      // pushed heavy sources into the per-source timeout.
+      // KEYSET, not offset. `.range()` with no ORDER BY leaves PostgreSQL free to
+      // return rows in any order, so pages can repeat rows and skip others.
+      // MEASURED 2026-07-27 on this table, three consecutive runs each:
+      //   offset, no ORDER BY        → 1,362 / 1,583 / 1,421   (unstable)
+      //   ORDER BY a non-unique col  →   363 /     0 / 1,084   (worse)
+      //   keyset on created_at       → 66,014 each time, but created_at is NOT
+      //                                unique, so ties can still skip a row
+      //   keyset on id (primary key) → 66,050 = exact table count
+      // Hence: keyset on the primary key. The created_at variant happened to come
+      // out whole; that was luck, not design.
+      //
+      // Impact of the old loop was SPEED, not corruption — a hypothesis that
+      // duplicates were leaking through was TESTED AND REFUTED: zero repeated
+      // url_hash across the whole table. The authoritative dedup is the chunked
+      // .in(url_hash) query in scrapeSource below, which never paginated.
       const knownUrls = new Set<string>();
       let cursor = '00000000-0000-0000-0000-000000000000';
       for (;;) {
@@ -115,7 +115,7 @@ export async function fetchRaw(source: Source): Promise<RawArticle[]> {
         if (page.length < 1000) break;
       }
       if (hasJob) {
-        all.push(...await fetchHtmlSource({ config, delayMs: source.request_delay_ms, knownUrls }));
+        all.push(...await fetchHtmlSource({ config, delayMs: source.request_delay_ms, knownUrls, sourceName: source.name }));
       }
       // Supplemental RSS/Atom feeds — e.g. a publisher's YouTube channel alongside its
       // website news. Each feed is independent; one failure doesn't kill the html job.
