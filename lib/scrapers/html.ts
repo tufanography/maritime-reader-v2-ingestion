@@ -15,6 +15,7 @@ import { hashUrl, randomUserAgent, sleep, stripHtml } from './util';
 import { tryParse, extractFirstDate, findAllDates, pickBestDate, type DateCandidate, type DateResolution } from './date';
 import { isPdfUrl, extractPdf } from './pdf';
 import { pickPdfTitle } from './pdf-title';
+import { recoverPdfTitle } from './pdf-title-recover';
 import { looksLikeArticle, looksLikeHub } from './quality';
 import { extractPdfSections, extractPdfSectionsAi } from '../ai/pdf-sections';
 import type { RawArticle } from './rss';
@@ -575,8 +576,11 @@ export async function fetchHtmlSource(args: {
    *  where most candidates would otherwise be re-fetched and re-parsed
    *  before the orchestrator's per-run dedup runs. */
   knownUrls?: Set<string>;
+  /** Source display name, used to pick the per-publisher title parser in
+   *  pdf-title-recover (Panama / American / London / Steamship layouts). */
+  sourceName?: string;
 }): Promise<RawArticle[]> {
-  const { config, delayMs, knownUrls } = args;
+  const { config, delayMs, knownUrls, sourceName } = args;
 
   // Multi-job branch: a single source can run several scraper configurations
   // (e.g. ABS = newsroom cards + monthly PDFs + rules PDFs). Each job runs
@@ -595,7 +599,7 @@ export async function fetchHtmlSource(args: {
           config.exclude_selector !== undefined && job.exclude_selector === undefined
             ? { ...job, exclude_selector: config.exclude_selector }
             : job;
-        const out = await fetchHtmlSource({ config: jobCfg, delayMs, knownUrls });
+        const out = await fetchHtmlSource({ config: jobCfg, delayMs, knownUrls, sourceName });
         all.push(...out);
       } catch (err) {
         // One bad job shouldn't kill the rest. Log and continue.
@@ -820,7 +824,14 @@ export async function fetchHtmlSource(args: {
         // (596 Panama Canal rows titled "May 4, 2007", 131 Britannia rows titled
         // "master template"). pickPdfTitle filters both candidates and prefers the
         // human-written anchor text. See pdf-title.ts for the measurements.
-        const title = pickPdfTitle(pdf.title, linkText, pdf.excerpt);
+        // Order matters. Anchor text and PDF metadata come first (a human wrote
+        // them). Next the STRUCTURED subject line — "SUBJECT:", "Dear Member:",
+        // "Advisory To Shipping No." — which is a far better headline than the
+        // document's opening sentence. The opening sentence is the last resort.
+        const title =
+          pickPdfTitle(pdf.title, linkText)
+          ?? recoverPdfTitle(pdf.excerpt, sourceName)?.title
+          ?? pickPdfTitle(null, null, pdf.excerpt);
         if (!title) {
           // LOUD, not silent: every candidate was junk (template name, bare date,
           // "Download pdf"). Dropping is correct — publishing "Download pdf" as a

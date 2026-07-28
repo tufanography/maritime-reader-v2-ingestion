@@ -74,10 +74,41 @@ function clean(s: string): string {
   return trimTail(out);
 }
 
+/** Abbreviations whose full stop does NOT end a sentence. Without these,
+ *  "Circular No. 19/09" would be cut at "Circular No". */
+const ABBREV = /\b(No|Nos|Mr|Mrs|Ms|Dr|St|Ltd|Inc|Co|Corp|vs|etc|approx|Art|Sec|Vol|Ref|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sept?|Oct|Nov|Dec)$/i;
+
+/** Cut a candidate down to a headline: stop at the first real sentence end, cap
+ *  at 110 characters, and never split a word. MEASURED failures this replaces:
+ *    "CLASS 5 PROTECTING & INDEMNITY ADVANCE… CALLS. At its meeting on 8 November
+ *     the Board considered the position of the open policy years"  (160 chars,
+ *     ran past the subject line into the letter)
+ *    "Circular 19/09: DIRECTIVE 2004/35/CE … WITH REGARD TO THE PREVENTION AN"
+ *     (chopped mid-word at the old 160 cap) */
+const MAX_TITLE = 110;
+function finalize(s: string): string {
+  let t = s.replace(/\s+/g, ' ').trim();
+  // First sentence end that is not an abbreviation.
+  for (let i = 0; i < t.length; i++) {
+    if (!'.!?'.includes(t[i])) continue;
+    if (i + 1 < t.length && !/\s/.test(t[i + 1])) continue;   // "2004/35/CE" style
+    if (ABBREV.test(t.slice(0, i))) continue;                  // "No." / "Ltd."
+    if (i >= 25) { t = t.slice(0, i); break; }
+  }
+  if (t.length > MAX_TITLE) {
+    const cut = t.slice(0, MAX_TITLE);
+    const lastSpace = cut.lastIndexOf(' ');
+    t = lastSpace > 60 ? cut.slice(0, lastSpace) : cut;        // word boundary
+  }
+  return t.replace(/[\s.,;:–—-]+$/, '').trim();
+}
+
 type Recovered = { title: string; how: string } | null;
 
-const ok = (title: string, how: string): Recovered =>
-  isUsableTitle(title) ? { title: title.slice(0, 160), how } : null;
+const ok = (title: string, how: string): Recovered => {
+  const t = finalize(title);
+  return isUsableTitle(t) ? { title: t, how } : null;
+};
 
 /** Panama Canal advisories: "Advisory A-16-2026: <subject>". The advisory number
  *  is a stable public identifier, so it leads the title. */
