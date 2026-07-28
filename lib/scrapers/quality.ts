@@ -164,7 +164,13 @@ export function looksLikeArticle(args: { title: string; excerpt: string; url?: s
     // Authority has revised transit booking rules effective 1 August 2026…").
     // A 200 threshold was still rejecting that circular. Bodies below ~100 chars
     // are caught by the short-excerpt rule above anyway.
-    const remaining = excerpt.replace(pat, ' ').replace(/\s+/g, ' ').trim();
+    // GLOBAL replace. Without /g only the FIRST match was removed, and a real CTA
+    // page repeats its call to action — that is what makes it a CTA page. MEASURED:
+    // "Sign up for alerts. " x7 (139 chars) left 119 chars of residue and PASSED,
+    // although the pre-fix code rejected it. The 100-char threshold was calibrated
+    // on single-occurrence bodies only.
+    const all = new RegExp(pat.source, pat.flags.includes('g') ? pat.flags : pat.flags + 'g');
+    const remaining = excerpt.replace(all, ' ').replace(/\s+/g, ' ').trim();
     if (remaining.length < 100) {
       return { ok: false, reason: `excerpt is mostly junk phrase ${pat} (${remaining.length}c left)` };
     }

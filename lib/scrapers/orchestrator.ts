@@ -269,6 +269,7 @@ export async function scrapeSource(source: Source): Promise<ScrapeResult> {
   // while ALL 9 of its live items were failing the DATE gate (MEASURED 2026-07-27).
   let rejectedQuality = 0;
   let rejectedNoDate = 0;
+  let insertFailed = 0;
 
   // require_date is now ON BY DEFAULT for every source. Articles whose
   // published_at couldn't be resolved float to the top under created_at
@@ -433,6 +434,18 @@ export async function scrapeSource(source: Source): Promise<ScrapeResult> {
       keywords,
       content_quality: contentQuality,
     }).select('id').single();
+    // An insert failure used to vanish here: no count, no log, and the run still
+    // finished 'success' with articles_new=0. A CHECK violation (document_type,
+    // segments, published_at_source), a NOT NULL, or an RLS refusal all read as
+    // "nothing new was found".
+    //
+    // This is also the PRECONDITION for adding a UNIQUE index on url_hash: with
+    // the error unread, a constraint violation would silently DROP the article
+    // instead of duplicating it — turning a visible problem into an invisible one.
+    if (insertErr) {
+      insertFailed++;
+      if (insertFailed <= 3) console.error(`  insert failed [${source.name}] ${raw.url}: ${insertErr.message}`);
+    }
     if (!insertErr && insertedRow) {
       inserted++;
       // Tag the new article. Failures here are non-fatal.
@@ -460,6 +473,22 @@ export async function scrapeSource(source: Source): Promise<ScrapeResult> {
   if (aiErrors > 0) errorParts.push(`${aiErrors} ai failures`);
   if (rejectedQuality > 0) errorParts.push(`${rejectedQuality} rejected by quality filter`);
   if (rejectedNoDate > 0) errorParts.push(`${rejectedNoDate} rejected: no usable date`);
+  if (insertFailed > 0) errorParts.push(`${insertFailed} insert failures`);
+
+  // ACCOUNTING INVARIANT.
+  // Every item fetched must end up in exactly one bucket: inserted, already
+  // known, or rejected for a stated reason. Anything left over was dropped
+  // somewhere that does not report itself — a silent PDF failure, a detail-fetch
+  // that returned null, a title that could not be resolved, a swallowed catch.
+  //
+  // This does not FIX those drops. It makes them countable, which is the thing
+  // that was missing when PDF extraction died for 39 days behind a run that
+  // reported 'success' on every tick. One number, written where the daily
+  // coverage audit already looks.
+  const duplicates = raws.length - fresh.length;
+  const accounted = inserted + duplicates + rejectedQuality + rejectedNoDate + insertFailed;
+  const unexplained = raws.length - accounted;
+  if (unexplained !== 0) errorParts.push(`${unexplained} unexplained drops`);
   await finishLog({
     status,
     articles_found: raws.length,
