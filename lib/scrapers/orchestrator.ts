@@ -140,6 +140,40 @@ export async function fetchRaw(source: Source): Promise<RawArticle[]> {
   return all;
 }
 
+/** Which of these url_hashes does the DB already hold?
+ *
+ *  Exported so tests exercise THIS function rather than a copy of its loop — a
+ *  test that reimplements the logic it is checking would pass even if the
+ *  shipped code were wrong.
+ *
+ *  Chunked at 200: the hash list travels in the request URL and Supabase caps
+ *  that near 16 KB. MEASURED 2026-07-27 against the live API —
+ *      200 hashes (~6 KB)  ok
+ *      400 hashes (~13 KB) ok
+ *      600 hashes (~19 KB) fetch failed
+ *     1000 hashes (~32 KB) Bad Request
+ *  Splash247 and The Maritime Executive both carry max_items: 1000, so the
+ *  ceiling is reachable in normal operation.
+ *
+ *  Returns the error instead of throwing, and NEVER returns a partial set: the
+ *  caller must be able to distinguish "nothing is known" from "we could not
+ *  find out", because those two look identical to a dedup check and the second
+ *  one would re-insert an entire feed. */
+export async function fetchKnownHashes(
+  sb: { from: (t: string) => any },
+  hashes: string[],
+  chunkSize = 200,
+): Promise<{ known: Set<string>; error?: string }> {
+  const known = new Set<string>();
+  for (let i = 0; i < hashes.length; i += chunkSize) {
+    const chunk = hashes.slice(i, i + chunkSize);
+    const { data, error } = await sb.from('articles').select('url_hash').in('url_hash', chunk);
+    if (error) return { known: new Set(), error: error.message };
+    for (const r of (data ?? []) as { url_hash: string }[]) known.add(r.url_hash);
+  }
+  return { known };
+}
+
 export async function scrapeSource(source: Source): Promise<ScrapeResult> {
   const sb = createServiceClient();
 
@@ -199,24 +233,19 @@ export async function scrapeSource(source: Source): Promise<ScrapeResult> {
   //      which reads as "nothing is known yet" — so a header-limit error would
   //      have re-inserted the ENTIRE feed rather than skipping one run.
   const hashes = raws.map((r) => ({ raw: r, hash: hashUrl(r.url) }));
-  const existingSet = new Set<string>();
-  for (let i = 0; i < hashes.length; i += 200) {
-    const chunk = hashes.slice(i, i + 200).map((h) => h.hash);
-    const { data, error } = await sb.from('articles').select('url_hash').in('url_hash', chunk);
-    if (error) {
-      // We cannot tell what we already hold, so we insert nothing. Losing one
-      // run is cheap; duplicating a whole feed is not.
-      const msg = `dedup query failed: ${error.message}`;
-      await finishLog({ status: 'error', error_message: msg });
-      await sb.from('sources').update({
-        last_scraped_at: new Date().toISOString(),
-        last_status: 'error',
-        last_error: msg,
-        last_group_index: (source.last_group_index ?? 0) + 1,
-      }).eq('id', source.id);
-      return { source_id: source.id, source_name: source.name, status: 'error', found: raws.length, inserted: 0, error: msg };
-    }
-    for (const r of (data ?? []) as { url_hash: string }[]) existingSet.add(r.url_hash);
+  const { known: existingSet, error: dedupError } = await fetchKnownHashes(sb, hashes.map((h) => h.hash));
+  if (dedupError) {
+    // We cannot tell what we already hold, so we insert nothing. Losing one run
+    // is cheap; duplicating a whole feed is not.
+    const msg = `dedup query failed: ${dedupError}`;
+    await finishLog({ status: 'error', error_message: msg });
+    await sb.from('sources').update({
+      last_scraped_at: new Date().toISOString(),
+      last_status: 'error',
+      last_error: msg,
+      last_group_index: (source.last_group_index ?? 0) + 1,
+    }).eq('id', source.id);
+    return { source_id: source.id, source_name: source.name, status: 'error', found: raws.length, inserted: 0, error: msg };
   }
   const fresh = hashes.filter((h) => !existingSet.has(h.hash));
 
@@ -461,11 +490,19 @@ type StuckScrape = { source_id: string; source_name: string; started_at: string 
 async function detectStuckScrapes(): Promise<StuckScrape[]> {
   const sb = createServiceClient();
   const cutoff = new Date(Date.now() - STUCK_SCRAPE_THRESHOLD_MS).toISOString();
-  const { data: stuckLogs } = await sb
+  const { data: stuckLogs, error } = await sb
     .from('scrape_logs')
     .select('id, source_id, started_at')
     .eq('status', 'running')
     .lt('started_at', cutoff);
+  // A monitor that swallows its own failure is worse than no monitor: an
+  // unread error left stuckLogs undefined, which returns [] — indistinguishable
+  // from a clean "nothing is stuck", and the operator email then confirms health
+  // that was never checked. Say so loudly instead.
+  if (error) {
+    console.error(`STUCK-SCRAPE CHECK FAILED — health of running scrapes is UNKNOWN this tick: ${error.message}`);
+    return [];
+  }
   if (!stuckLogs || stuckLogs.length === 0) return [];
 
   const out: StuckScrape[] = [];
@@ -474,17 +511,23 @@ async function detectStuckScrapes(): Promise<StuckScrape[]> {
     const { data: src } = await sb.from('sources').select('name').eq('id', row.source_id).maybeSingle();
     const name = (src as { name?: string } | null)?.name ?? row.source_id;
 
-    await sb.from('scrape_logs').update({
+    // Both writes are the POINT of this function — they are what clears the
+    // stuck row and stops the cron re-picking the same broken source. If one
+    // fails silently the log stays 'running', the same scrape is reported stuck
+    // on every tick, and the operator gets the same alert forever.
+    const { error: logErr } = await sb.from('scrape_logs').update({
       status: 'error',
       error_message: 'auto-bypass: scrape exceeded 30 min — likely Vercel function timeout',
       finished_at: now,
     }).eq('id', row.id);
+    if (logErr) console.error(`stuck-scrape: could not close log ${row.id} for ${name}: ${logErr.message}`);
 
-    await sb.from('sources').update({
+    const { error: srcErr } = await sb.from('sources').update({
       last_scraped_at: now,
       last_status: 'blocked',
       last_error: 'auto-bypass: scrape repeatedly exceeded 30 min (function timeout)',
     }).eq('id', row.source_id);
+    if (srcErr) console.error(`stuck-scrape: could not bypass source ${name}: ${srcErr.message}`);
 
     out.push({ source_id: row.source_id, source_name: name, started_at: row.started_at });
   }
