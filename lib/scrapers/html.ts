@@ -14,7 +14,7 @@ import * as cheerio from 'cheerio';
 import { hashUrl, randomUserAgent, sleep, stripHtml } from './util';
 import { tryParse, extractFirstDate, findAllDates, pickBestDate, type DateCandidate, type DateResolution } from './date';
 import { isPdfUrl, extractPdf } from './pdf';
-import { pickPdfTitle } from './pdf-title';
+import { pickPdfTitle, titleFromUrl } from './pdf-title';
 import { recoverPdfTitle } from './pdf-title-recover';
 import { looksLikeArticle, looksLikeHub } from './quality';
 import { extractPdfSections, extractPdfSectionsAi } from '../ai/pdf-sections';
@@ -831,6 +831,7 @@ export async function fetchHtmlSource(args: {
         const title =
           pickPdfTitle(pdf.title, linkText)
           ?? recoverPdfTitle(pdf.excerpt, sourceName)?.title
+          ?? titleFromUrl(link)
           ?? pickPdfTitle(null, null, pdf.excerpt);
         if (!title) {
           // LOUD, not silent: every candidate was junk (template name, bare date,

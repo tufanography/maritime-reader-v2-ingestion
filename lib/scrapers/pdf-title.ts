@@ -113,6 +113,48 @@ function openingSentence(body: string | null | undefined): string {
   return words.length >= 15 ? words : '';
 }
 
+/** Headline taken from the PDF's own file name.
+ *
+ *  Publishers who name files after the article hand us a clean headline for
+ *  free, and it beats every body heuristic. MEASURED 2026-07-28 on Britannia,
+ *  whose Crew Watch articles are separate PDFs whose text begins with the
+ *  magazine's running header:
+ *      Preventing-falls-from-hatch-cover-edges.pdf
+ *        metadata / subject line / opening sentence → all null; the item was
+ *        being DROPPED entirely
+ *        file name → "Preventing falls from hatch cover edges"
+ *      Lifeboat-safety.pdf
+ *        opening sentence → "CREW WATCH LIFEBOAT SAFETY: … CREW WATCH However,
+ *        incidents" (page furniture plus a run-on)
+ *        file name → "Lifeboat safety"
+ *
+ *  Two words is enough here, unlike the general rule: a file name is already
+ *  specific to one document, so "Lifeboat safety" identifies an article, while
+ *  a two-word BODY heading ("Crew Watch") is usually a section label. Numeric
+ *  or coded names ("cir_16_26.pdf", "5429.PDF") fail the shared junk test and
+ *  fall through to the next candidate. */
+export function titleFromUrl(url: string | null | undefined): string | null {
+  if (!url) return null;
+  let file: string;
+  try { file = decodeURIComponent(new URL(url).pathname.split('/').pop() ?? ''); }
+  catch { return null; }
+  const slug = file
+    .replace(/\.[a-z0-9]{2,4}$/i, '')       // extension
+    .replace(/[-_+]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (slug.length < 12) return null;
+  if (slug.split(' ').length < 2) return null;
+  // Reuse the shared junk test, minus its three-word rule (see above).
+  const words = slug.split(' ').length;
+  if (words === 2) {
+    if (!/[a-z]/i.test(slug) || NUMERIC_ONLY.test(slug) || DATE_ONLY.test(slug)) return null;
+    if (GENERIC_LABEL.test(slug) || TEMPLATE_NAME.test(slug)) return null;
+    return slug;
+  }
+  return isUsableTitle(slug) ? tidyTitle(slug) : null;
+}
+
 /** Pick the most trustworthy headline available for a PDF item.
  *  Returns null when every candidate is junk — the caller must drop and LOG it,
  *  never publish the junk. */

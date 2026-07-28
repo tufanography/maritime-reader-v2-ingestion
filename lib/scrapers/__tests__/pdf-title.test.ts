@@ -2,7 +2,7 @@
 //
 // Every case here is a REAL failure that reached production, kept so the same
 // bug cannot return quietly. Run: npx tsx lib/scrapers/__tests__/pdf-title.test.ts
-import { isUsableTitle, pickPdfTitle } from '../pdf-title';
+import { isUsableTitle, pickPdfTitle, titleFromUrl } from '../pdf-title';
 import { recoverPdfTitle } from '../pdf-title-recover';
 
 let pass = 0;
@@ -83,6 +83,24 @@ const cut = recoverPdfTitle(longDirective, 'American P&I Club')?.title ?? '';
 checkThat('110 karakteri asmamali', cut.length <= 110, `uzunluk=${cut.length}`);
 checkThat('kelime ortasinda kesilmemeli', !/\s\S{1,2}$/.test(cut) || cut.endsWith('ON'), `son: "${cut.slice(-24)}"`);
 checkThat('circular no korunmali', cut.startsWith('Circular 19/09:'), `gelen: "${cut.slice(0, 30)}"`);
+
+// --- titleFromUrl: the publisher's own file name --------------------------
+// Britannia's Crew Watch articles are SEPARATE PDFs whose text opens with the
+// magazine running header. Before this source existed, the first case below was
+// dropped outright and the second published its page furniture as a headline.
+check('dosya adindan baslik',
+  titleFromUrl('https://britanniapandi.com/wp-content/uploads/2026/07/Preventing-falls-from-hatch-cover-edges.pdf'),
+  'Preventing falls from hatch cover edges');
+check('iki kelimelik dosya adi kabul (dosya adi zaten spesifik)',
+  titleFromUrl('https://britanniapandi.com/wp-content/uploads/2026/07/Lifeboat-safety.pdf'),
+  'Lifeboat safety');
+check('kodlu dosya adi reddedilmeli',
+  titleFromUrl('https://www.american-club.com/files/files/cir_16_26.pdf'), null);
+check('sayisal dosya adi reddedilmeli',
+  titleFromUrl('https://www.londonpandi.com/files/5429.PDF'), null);
+check('tek kelime reddedilmeli',
+  titleFromUrl('https://example.com/files/circulars.pdf'), null);
+check('url olmayan girdi -> null', titleFromUrl('not a url'), null);
 
 // --- nothing trustworthy -> null, never invented ---------------------------
 check('kurtarilamayan govde -> null', recoverPdfTitle('12 | CREW WATCH CREW WATCH | 13', 'Britannia P&I'), null);
