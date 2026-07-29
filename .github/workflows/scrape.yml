@@ -17,8 +17,10 @@ on:
         required: false
         default: false
         type: boolean
-  # schedule:
-  #   - cron: '23 */3 * * *'   # ENABLE AT CUTOVER (and disable v1 scrape.yml)
+  schedule:
+    - cron: '23 */3 * * *'   # every 3h — cron fallback so a stalled watchdog can't silently halt scraping.
+                             # v1 (maritime-pulse) scrape schedule is OFF (verified 2026-07-29: last scheduled run Jun 18)
+                             # → only ONE scheduled scraper. concurrency group below serializes cron with watchdog dispatches.
 
 concurrency:
   group: scrape-v2-ingestion
