@@ -1,0 +1,41 @@
+name: Search fixture — Splash247 (from GHA IP)
+
+# Splash247 sits behind Cloudflare and 403s the local/home datacenter IP, so its
+# rare body-terms cannot be captured locally. The GHA runner's IP passes CF (the
+# scraper already fetches Splash247 from here), so this workflow generates the
+# Splash247 slice of the PERMANENT search regression fixture and uploads it as an
+# artifact. Download it into tmp/search-fixture-splash.json before running
+# scripts/search-check.mjs locally — search-check merges it automatically.
+#
+# Manual only: run it once to seed the Splash terms, re-run if the fixture needs
+# refreshing. Read-only w.r.t. the site; it only reads the DB + fetches Splash pages.
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: search-fixture-splash
+  cancel-in-progress: false
+
+jobs:
+  splash-fixture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+      - run: npm ci
+      - name: Generate Splash247 fixture (rare body-terms, sequential fetch)
+        env:
+          SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: node scripts/search-fixture.mjs --splash-only
+      - name: Upload fixture artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: search-fixture-splash
+          path: tmp/search-fixture-splash.json
+          if-no-files-found: error

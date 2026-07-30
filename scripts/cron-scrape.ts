@@ -9,6 +9,7 @@
 
 import 'dotenv/config';
 import * as dotenv from 'dotenv';
+import { appendFileSync } from 'fs';
 dotenv.config({ path: '.env.local', override: true });
 
 import { scrapeAllDue } from '../lib/scrapers/orchestrator';
@@ -44,6 +45,14 @@ async function main() {
   for (const r of results) totalInserted += r.inserted ?? 0;
 
   console.log(`\nDone in ${dt}s — ${results.length} source(s) ran, ${totalInserted} new article(s)\n`);
+
+  // DELTA AUTO-TRIGGER: expose the insert count as a GHA step output so scrape.yml
+  // can fire a repository_dispatch to the v2 site (deploy-delta) ONLY when there is
+  // fresh content — this is what stops the site sitting daily-stale between the 2h
+  // delta crons. No-op locally (GITHUB_OUTPUT unset).
+  if (process.env.GITHUB_OUTPUT) {
+    try { appendFileSync(process.env.GITHUB_OUTPUT, `inserted=${totalInserted}\n`); } catch { /* non-fatal */ }
+  }
   console.log('Per-source results:');
   for (const r of results) {
     console.log(`  [${r.status}] ${r.source_name?.padEnd(32) ?? '?'} inserted=${r.inserted ?? 0}${r.error ? ' err=' + r.error.slice(0, 60) : ''}`);

@@ -1,0 +1,35 @@
+name: Heartbeat (scraper-alive watchdog)
+
+# B4 — independent total-death detector. Its OWN cron so it still fires if scrape.yml
+# stops running entirely. Alarms (Resend) when no scrape has SUCCEEDED in >6h.
+# Read-only, best-effort email, never fails. Public repo → GHA minutes free.
+
+on:
+  schedule:
+    - cron: '47 */6 * * *'   # every 6h at :47 (off top-of-hour so GitHub doesn't drop it)
+  workflow_dispatch:
+
+concurrency:
+  group: heartbeat
+  cancel-in-progress: false
+
+jobs:
+  heartbeat:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+      - run: npm ci
+      - name: Check last successful scrape
+        env:
+          SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          RESEND_FROM_ADDRESS: ${{ secrets.RESEND_FROM_ADDRESS }}
+          ALERT_EMAIL: ${{ secrets.ALERT_EMAIL }}
+          HEARTBEAT_STALE_HOURS: '6'
+        run: npx tsx scripts/heartbeat-check.ts

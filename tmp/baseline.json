@@ -1,0 +1,407 @@
+{
+  "generated_at": "2026-07-30T08:34:44.606Z",
+  "site": "https://maritimereader.com/",
+  "method": "pagefind-full-result-set",
+  "deltaMerged": true,
+  "control": [
+    {
+      "query": "\"EMEA News\"",
+      "expected_article_id": "a44642cb-297e-480d-9ac3-f6d635c2445a",
+      "source": "CONTROL",
+      "title": "EMEA News",
+      "in_set": true,
+      "rank": 98,
+      "total": 257,
+      "scanned": 150
+    },
+    {
+      "query": "\"World News\"",
+      "expected_article_id": "fb58a521-af68-436f-a179-3d924c76e9f9",
+      "source": "CONTROL",
+      "title": "World News",
+      "in_set": false,
+      "rank": -1,
+      "total": 350,
+      "scanned": 150
+    },
+    {
+      "query": "\"Americas News\"",
+      "expected_article_id": "4c6d8c8d-ae56-4c2f-a9a0-78e550ca518c",
+      "source": "CONTROL",
+      "title": "Americas News",
+      "in_set": true,
+      "rank": 30,
+      "total": 54,
+      "scanned": 54
+    },
+    {
+      "query": "\"Chinas Newest TargetPractice\"",
+      "expected_article_id": "c1edf18f-fef9-4428-b209-917703395707",
+      "source": "CONTROL",
+      "title": "China's Newest Target-Practice \"Ship\" Looks Exactly Like a U.S. Destroyer",
+      "in_set": true,
+      "rank": 1,
+      "total": 1,
+      "scanned": 1
+    },
+    {
+      "query": "\"US Launches New\"",
+      "expected_article_id": "d9149715-e3a4-41d0-ae42-f12ff89d8016",
+      "source": "CONTROL",
+      "title": "U.S. Launches New Wave of Strikes on Targets in Iran",
+      "in_set": true,
+      "rank": 5,
+      "total": 5,
+      "scanned": 5
+    },
+    {
+      "query": "\"Turkish FSRU\"",
+      "expected_article_id": "41970d8a-87ef-4ffc-94e6-a9858715634f",
+      "source": "CONTROL",
+      "title": "Wärtsilä lands lifecycle contract for Turkish FSRU",
+      "in_set": true,
+      "rank": 1,
+      "total": 1,
+      "scanned": 1
+    },
+    {
+      "query": "\"Gulf Marine Services\"",
+      "expected_article_id": "b427dd2a-2621-421a-a6a4-d54d7f2c1f36",
+      "source": "CONTROL",
+      "title": "Gulf Marine Services locks in four-year offshore Brazil assignment",
+      "in_set": true,
+      "rank": 8,
+      "total": 23,
+      "scanned": 23
+    },
+    {
+      "query": "\"Suriname FPSO\"",
+      "expected_article_id": "293c2e53-ae2e-4d18-9a5b-77dc5825c40c",
+      "source": "CONTROL",
+      "title": "Suriname FPSO to trial kite-assisted towing",
+      "in_set": true,
+      "rank": 2,
+      "total": 3,
+      "scanned": 3
+    }
+  ],
+  "control_ok": true,
+  "fixture": [
+    {
+      "query": "Fox News",
+      "expected_article_id": "ac2531b2-4b0c-44ae-8b9e-65001dad46cc",
+      "source": "gCaptain",
+      "db_freq": 1,
+      "title": "Trump Warns Iran of ‘Beating’ After Jordan Base Attack",
+      "url": "https://gcaptain.com/trump-warns-iran-of-beating-after-jordan-base-attack/",
+      "in_set": false,
+      "rank": -1,
+      "total": 76,
+      "scanned": 76
+    },
+    {
+      "query": "President Donald Trump",
+      "expected_article_id": "cd2b4821-99e8-4692-a599-8f523d323944",
+      "source": "gCaptain",
+      "db_freq": 0,
+      "title": "Middle East War Expands to Mediterranean With Drone Strike at Key Egypt LNG Terminal",
+      "url": "https://gcaptain.com/middle-east-war-expands-to-mediterranean-with-drone-strike-at-key-egypt-lng-terminal/",
+      "in_set": false,
+      "rank": -1,
+      "total": 1562,
+      "scanned": 150
+    },
+    {
+      "query": "Damen Shipyards Group",
+      "expected_article_id": "f24bfd3e-1c67-4056-b907-952b9a201d30",
+      "source": "gCaptain",
+      "db_freq": 1,
+      "title": "Damen launches second CSOV 9020 for TSSM",
+      "url": "https://gcaptain.com/damen-launches-second-csov-9020-for-tssm/",
+      "in_set": true,
+      "rank": 44,
+      "total": 74,
+      "scanned": 74
+    },
+    {
+      "query": "Majid Asgaripour",
+      "expected_article_id": "8399182a-03dd-4133-9cf8-0a5c279fa205",
+      "source": "gCaptain",
+      "db_freq": 0,
+      "title": "New U.S. Sanctions Target Iran’s Emerging Strait of Hormuz Maritime Services Network",
+      "url": "https://gcaptain.com/new-u-s-sanctions-target-irans-emerging-strait-of-hormuz-maritime-services-network/",
+      "in_set": false,
+      "rank": -1,
+      "total": 2,
+      "scanned": 2
+    },
+    {
+      "query": "Petroleum Exhibition and Conference",
+      "expected_article_id": "dd33ca17-7493-496f-be52-6f3d70d62549",
+      "source": "gCaptain",
+      "db_freq": 0,
+      "title": "UAE Presses Ahead With Persian Gulf LNG Exports Despite Tensions",
+      "url": "https://gcaptain.com/uae-presses-ahead-with-persian-gulf-lng-exports-despite-tensions/",
+      "in_set": false,
+      "rank": -1,
+      "total": 2,
+      "scanned": 2
+    },
+    {
+      "query": "Supreme Leader Ayatollah",
+      "expected_article_id": "84e42f68-d6c4-40f0-8e97-8105bc0f19a5",
+      "source": "gCaptain",
+      "db_freq": 0,
+      "title": "Yemen’s Houthis Considering Fees for Ships Sailing Through Red Sea, Sources Say",
+      "url": "https://gcaptain.com/yemens-houthis-considering-fees-for-ships-sailing-through-red-sea-sources-say/",
+      "in_set": false,
+      "rank": -1,
+      "total": 44,
+      "scanned": 44
+    },
+    {
+      "query": "Orion Reederei",
+      "expected_article_id": "3369272f-afd8-4c7e-b6b9-763fbc8a0240",
+      "source": "The Maritime Executive",
+      "db_freq": 0,
+      "title": "RightShip and NorthStandard Collaborate to Reduce Duplicate Inspections",
+      "url": "https://maritime-executive.com/article/rightship-and-northstandard-collaborate-to-reduce-duplicate-inspections",
+      "in_set": false,
+      "rank": -1,
+      "total": 14,
+      "scanned": 14
+    },
+    {
+      "query": "Chris Miller",
+      "expected_article_id": "9344d0b7-41cf-48db-bec2-b9d0a76d2365",
+      "source": "The Maritime Executive",
+      "db_freq": 0,
+      "title": "Maritime Partners Adds M/V Lulu Hamilton to Fleet",
+      "url": "https://maritime-executive.com/article/maritime-partners-adds-m-v-lulu-hamilton-to-fleet",
+      "in_set": false,
+      "rank": -1,
+      "total": 0,
+      "scanned": 0
+    },
+    {
+      "query": "Damen Shipyards Group",
+      "expected_article_id": "e484b555-6810-47fd-97c0-1f62d2f8587a",
+      "source": "The Maritime Executive",
+      "db_freq": 1,
+      "title": "Damen Launches Second CSOV 9020 for TSSM",
+      "url": "https://maritime-executive.com/article/damen-launches-second-csov-9020-for-tssm",
+      "in_set": true,
+      "rank": 50,
+      "total": 74,
+      "scanned": 74
+    },
+    {
+      "query": "Nile Delta",
+      "expected_article_id": "d135fed3-102e-485b-9ca5-f323120c131b",
+      "source": "The Maritime Executive",
+      "db_freq": 0,
+      "title": "LNG Tankers Struck in Apparent Drone Attack on Egypt's Port of Damietta",
+      "url": "https://maritime-executive.com/article/lng-tankers-struck-in-apparent-drone-attack-on-egypt-s-port-of-damietta",
+      "in_set": true,
+      "rank": 3,
+      "total": 8,
+      "scanned": 8
+    },
+    {
+      "query": "Critical Entities Resilience",
+      "expected_article_id": "65ff948f-c382-4c65-93f3-83cf53b47f6d",
+      "source": "The Maritime Executive",
+      "db_freq": 0,
+      "title": "EU Implements New Critical Infrastructure Risk System",
+      "url": "https://maritime-executive.com/article/eu-implements-new-critical-infrastructure-risk-system",
+      "in_set": false,
+      "rank": -1,
+      "total": 13,
+      "scanned": 13
+    },
+    {
+      "query": "Prince Edward Graving",
+      "expected_article_id": "1cd2c33c-eb1c-4898-955a-289ab402830c",
+      "source": "The Maritime Executive",
+      "db_freq": 0,
+      "title": "South Africa Drydocks Largest Vessel in More than a Decade",
+      "url": "https://maritime-executive.com/article/south-africa-drydocks-largest-vessel-in-more-than-a-decade",
+      "in_set": false,
+      "rank": -1,
+      "total": 2,
+      "scanned": 2
+    },
+    {
+      "query": "Ragnar Stoud Platou",
+      "expected_article_id": "404a7a37-b4fe-400e-8730-9dcbdea1316a",
+      "source": "Marine Insight",
+      "db_freq": 0,
+      "title": "Norwegian Chemical Tanker Catches Fire Off Fredrikstad",
+      "url": "https://www.marineinsight.com/norwegian-chemical-tanker-catches-fire-off-fredrikstad/?utm_source=rss&utm_medium=rss&utm_campaign=norwegian-chemical-tanker-catches-fire-off-fredrikstad",
+      "in_set": true,
+      "rank": 1,
+      "total": 2,
+      "scanned": 2
+    },
+    {
+      "query": "Dmitry Peskov",
+      "expected_article_id": "e32a292e-4f8a-44e7-9c47-57f24550841d",
+      "source": "Marine Insight",
+      "db_freq": 0,
+      "title": "Russia Plans To Arm Civilian Grain Ships With Heavy Machine Guns In Sea Of Azov",
+      "url": "https://www.marineinsight.com/russia-plans-to-arm-civilian-grain-ships-with-heavy-machine-guns-in-sea-of-azov/?utm_source=rss&utm_medium=rss&utm_campaign=russia-plans-to-arm-civilian-grain-ships-with-heavy-machine-guns-in-sea-of-azov",
+      "in_set": false,
+      "rank": -1,
+      "total": 15,
+      "scanned": 15
+    },
+    {
+      "query": "Khoi Nguyen",
+      "expected_article_id": "e807bcc1-e99a-4101-8deb-2af0fcb744a4",
+      "source": "Marine Insight",
+      "db_freq": 0,
+      "title": "Cargo Ship With 62 People Onboard Sinks Off Chinese-Occupied Shoal In South China Sea",
+      "url": "https://www.marineinsight.com/cargo-ship-with-62-people-onboard-sinks-off-chinese-occupied-shoal-in-south-china-sea/?utm_source=rss&utm_medium=rss&utm_campaign=cargo-ship-with-62-people-onboard-sinks-off-chinese-occupied-shoal-in-south-china-sea",
+      "in_set": true,
+      "rank": 7,
+      "total": 14,
+      "scanned": 14
+    },
+    {
+      "query": "Hohe See",
+      "expected_article_id": "f9dfb5ab-d67a-4959-9a69-f7afc13f379f",
+      "source": "Marine Insight",
+      "db_freq": 0,
+      "title": "German Police Recover Broken 20 Meter Wind Turbine Blade Drifting In North Sea",
+      "url": "https://www.marineinsight.com/german-police-recover-broken-20-meter-wind-turbine-blade-drifting-in-north-sea/?utm_source=rss&utm_medium=rss&utm_campaign=german-police-recover-broken-20-meter-wind-turbine-blade-drifting-in-north-sea",
+      "in_set": true,
+      "rank": 3,
+      "total": 4,
+      "scanned": 4
+    },
+    {
+      "query": "Yahya Saree",
+      "expected_article_id": "5f884fed-1987-4235-b641-df6c9b8ae14f",
+      "source": "Marine Insight",
+      "db_freq": 0,
+      "title": "Houthis Claim Ballistic Missile Attack On Saudi Oil Tanker In Red Sea",
+      "url": "https://www.marineinsight.com/houthis-claim-ballistic-missile-attack-on-saudi-oil-tanker-in-red-sea/?utm_source=rss&utm_medium=rss&utm_campaign=houthis-claim-ballistic-missile-attack-on-saudi-oil-tanker-in-red-sea",
+      "in_set": true,
+      "rank": 18,
+      "total": 43,
+      "scanned": 43
+    },
+    {
+      "query": "Onego Otra",
+      "expected_article_id": "491badbc-26ba-4639-b008-792b16038680",
+      "source": "Marine Insight",
+      "db_freq": 0,
+      "title": "Grounded Cargo Ship Freed In St Lawrence River After 4 Week Salvage Effort",
+      "url": "https://www.marineinsight.com/grounded-cargo-ship-freed-in-st-lawrence-river-after-4-week-salvage-effort/?utm_source=rss&utm_medium=rss&utm_campaign=grounded-cargo-ship-freed-in-st-lawrence-river-after-4-week-salvage-effort",
+      "in_set": true,
+      "rank": 1,
+      "total": 5,
+      "scanned": 5
+    },
+    {
+      "query": "Official Journal",
+      "expected_article_id": "9ca98e08-b88e-4e54-a999-a580757f5b98",
+      "source": "Swedish Club",
+      "db_freq": 0,
+      "title": "EU Sanctions: 21st Sanctions Package Against Russia - The Swedish Club",
+      "url": "https://www.swedishclub.com/news/circulars/eu-sanctions-21st-sanctions-package-against-russia/",
+      "in_set": false,
+      "rank": -1,
+      "total": 103,
+      "scanned": 103
+    },
+    {
+      "query": "In the Club",
+      "expected_article_id": "28a80f12-9191-46d3-bd2d-a1f62dfeae9e",
+      "source": "Swedish Club",
+      "db_freq": 1,
+      "title": "Houthi forces in Yemen have announced an immediate maritime embargo against Saudi Arabia -",
+      "url": "https://www.swedishclub.com/news/member-alert/houthi-forces-in-yemen-have-announced-an-immediate-maritime-embargo-against-saudi-arabia/",
+      "in_set": true,
+      "rank": 7,
+      "total": 9186,
+      "scanned": 150
+    },
+    {
+      "query": "Restrictions Clause",
+      "expected_article_id": "1ad91270-6b85-4476-8764-bcf4b0759953",
+      "source": "Swedish Club",
+      "db_freq": 2,
+      "title": "EU 20th Sanctions Package: Owner obligations on tanker sales",
+      "url": "https://www.swedishclub.com/news/club-news/eu-20th-sanctions-package-owner-obligations-on-tanker-sales/",
+      "in_set": true,
+      "rank": 23,
+      "total": 73,
+      "scanned": 73
+    },
+    {
+      "query": "Eastern Daylight Time",
+      "expected_article_id": "57a87f43-265d-4bfe-9d4b-e94c39973085",
+      "source": "Swedish Club",
+      "db_freq": 0,
+      "title": "Ceasefire or no ceasefire, the risk in the Strait remains high  - The Swedish Club",
+      "url": "https://www.swedishclub.com/news/crisis-news/ceasefire-or-no-ceasefire-the-risk-in-the-strait-remains-high/",
+      "in_set": false,
+      "rank": -1,
+      "total": 43,
+      "scanned": 43
+    },
+    {
+      "query": "Julia Ju",
+      "expected_article_id": "9511310c-a8c6-4e33-9dac-17ec6c0fb850",
+      "source": "Swedish Club",
+      "db_freq": 1,
+      "title": "The Swedish Club warns crew competence must keep pace with Asia's new generation of vessel",
+      "url": "https://www.swedishclub.com/news/press-release/the-swedish-club-warns-crew-competence-must-keep-pace-with-asias-new-generation-of-vessels/",
+      "in_set": false,
+      "rank": -1,
+      "total": 47,
+      "scanned": 47
+    },
+    {
+      "query": "International Recommended Transit",
+      "expected_article_id": "3d33d905-ae95-4449-a19c-50a0c4222b9e",
+      "source": "Swedish Club",
+      "db_freq": 0,
+      "title": "Somali Piracy Returns: Understanding the Risk and How Your Cover Responds - The Swedish Cl",
+      "url": "https://www.swedishclub.com/news/club-news/somali-piracy-returns-understanding-the-risk-and-how-your-cover-responds/",
+      "in_set": false,
+      "rank": -1,
+      "total": 104,
+      "scanned": 104
+    }
+  ],
+  "summary": {
+    "control": {
+      "total": 8,
+      "in_set": 7
+    },
+    "fixture": {
+      "total": 24,
+      "in_set": 10
+    },
+    "bySource": {
+      "gCaptain": {
+        "total": 6,
+        "in_set": 1
+      },
+      "The Maritime Executive": {
+        "total": 6,
+        "in_set": 2
+      },
+      "Marine Insight": {
+        "total": 6,
+        "in_set": 5
+      },
+      "Swedish Club": {
+        "total": 6,
+        "in_set": 2
+      }
+    }
+  }
+}

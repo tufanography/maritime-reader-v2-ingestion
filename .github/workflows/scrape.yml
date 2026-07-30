@@ -48,6 +48,7 @@ jobs:
       - name: Install Playwright Chromium (for requires_js sources)
         run: npx playwright install --with-deps chromium
       - name: Run scraper
+        id: scrape
         env:
           NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
@@ -60,3 +61,31 @@ jobs:
           SCRAPE_FORCE: ${{ inputs.force && '1' || '' }}
           SCRAPE_RUNNER: cloud
         run: npx tsx scripts/cron-scrape.ts
+
+      # DELTA AUTO-TRIGGER: only when this run actually inserted new articles, poke
+      # the v2 site to rebuild its 2h delta feed + search index immediately instead
+      # of waiting for the next scheduled delta cron (which is what left the site
+      # looking daily-stale). concurrency group `maritime-r2-deploy` on the site side
+      # serializes it against deploy-base, so there is no R2-manifest race.
+      #
+      # ⚠️ REQUIRES a secret the HUMAN must create: V2_DISPATCH_TOKEN = a fine-grained
+      #    PAT (or classic `repo` token) with "Contents: read & write" / dispatch
+      #    permission on tufanography/maritime-reader-v2. Do NOT invent a token. Until
+      #    the secret exists this step no-ops (logged), so the workflow stays green.
+      - name: Trigger v2 site delta deploy (only on new content)
+        if: ${{ steps.scrape.outputs.inserted != '' && steps.scrape.outputs.inserted != '0' }}
+        env:
+          V2_DISPATCH_TOKEN: ${{ secrets.V2_DISPATCH_TOKEN }}
+          INSERTED: ${{ steps.scrape.outputs.inserted }}
+        run: |
+          if [ -z "$V2_DISPATCH_TOKEN" ]; then
+            echo "V2_DISPATCH_TOKEN not set — skipping delta trigger. Add the secret to enable auto-refresh ($INSERTED new articles this run)."
+            exit 0
+          fi
+          echo "Dispatching fresh-content ($INSERTED new articles) to maritime-reader-v2…"
+          curl -sf -X POST \
+            -H "Authorization: Bearer $V2_DISPATCH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            https://api.github.com/repos/tufanography/maritime-reader-v2/dispatches \
+            -d "{\"event_type\":\"fresh-content\",\"client_payload\":{\"inserted\":\"$INSERTED\"}}"

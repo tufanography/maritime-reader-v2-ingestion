@@ -1,5 +1,61 @@
 import Parser from 'rss-parser';
 import { randomUserAgent, sleep, stripHtml } from './util';
+import { gateText, filterContentTerms, isProperNounOrAcronym } from '../tagging/gate';
+import { extractKeywords } from '../tagging/keywords';
+
+// How many terms to pull from the (longer) selected body text for search.
+// The card-level `keywords` stays at 5 (untouched); content_terms is a search
+// aid so we take more of the body's salient proper nouns.
+const CONTENT_TERMS_MAX = 15;
+// Over-extract before filtering: the extractor leads with title-phrase slices and
+// stopwords that filterContentTerms() drops, so we need a deep candidate pool for
+// enough real proper nouns to survive.
+const CONTENT_TERMS_RAW = 45;
+
+/** Enforce the content_terms contract as a LAST-RESORT assert (filterContentTerms
+ *  should already guarantee it): every stored term is a proper noun / acronym with
+ *  no sentence punctuation. Throws (loud bug) if a bad term slipped through. */
+function assertTerms(terms: string[]): void {
+  for (const t of terms) {
+    if (/[.!?;:]/.test(t) || !isProperNounOrAcronym(t)) {
+      throw new Error(`content_terms contract violated — not a proper-noun/acronym term: ${JSON.stringify(t)}`);
+    }
+  }
+}
+
+export type SelectedText = {
+  /** Which candidate fed the extractor. */
+  text_source: 'content' | 'excerpt' | 'none';
+  /** Extractor output (term list). Empty when text_source='none'. */
+  content_terms: string[];
+  /** First gate rejection reason when nothing passed. */
+  gate_reason?: string;
+};
+
+/** STEP 3 core: given the article title, the stripped full `content` (may be ''),
+ *  and the stripped `excerpt` (may be ''), pick the FIRST candidate that passes
+ *  the quality gate and run the deterministic extractor on it IN MEMORY. The
+ *  selected text is NEVER returned/stored — only the resulting terms. */
+export function selectAndExtract(title: string, contentText: string, excerptText: string): SelectedText {
+  const candidates: Array<{ src: 'content' | 'excerpt'; text: string }> = [
+    { src: 'content', text: (contentText || '').slice(0, 4000) },
+    { src: 'excerpt', text: (excerptText || '') },
+  ];
+  let firstReason: string | undefined;
+  for (const c of candidates) {
+    const g = gateText(title, c.text);
+    if (g.ok) {
+      // Reuse the deterministic extractor, then filter to quality terms (drop
+      // title slices + stopwords, keep proper nouns / acronyms) and cap.
+      const raw = extractKeywords({ title, excerpt: c.text }, CONTENT_TERMS_RAW);
+      const terms = filterContentTerms(title, raw).slice(0, CONTENT_TERMS_MAX);
+      assertTerms(terms);
+      return { text_source: c.src, content_terms: terms };
+    }
+    if (!firstReason) firstReason = g.reason;
+  }
+  return { text_source: 'none', content_terms: [], gate_reason: firstReason };
+}
 
 /** Trim the noisy tail of a YouTube video description — promo links,
  *  social handles, hashtags, "Marine Traffic" reference rows, and the
@@ -154,6 +210,12 @@ export type RawArticle = {
   /** Trust level for published_at. NULL means not assessed; consumers
    *  treat NULL as 'low' confidence (show "Approximate date" badge). */
   published_at_confidence?: 'high' | 'medium' | 'low' | null;
+  /** STEP 3 search-recall provenance. content_terms = deterministic extractor
+   *  output on the gated best text (in memory only). Undefined on code paths
+   *  that don't compute it (older HTML sources). */
+  content_terms?: string[];
+  text_source?: 'content' | 'excerpt' | 'none';
+  gate_reason?: string;
 };
 
 const OG_IMAGE_TIMEOUT_MS = 8000;
@@ -345,7 +407,10 @@ function decodeEntities(s: string): string {
 export async function fetchWpRest(baseUrl: string, opts: { perPage?: number } = {}): Promise<RawArticle[]> {
   const per = Math.min(Math.max(opts.perPage ?? 20, 1), 100);
   const sep = baseUrl.includes('?') ? '&' : '?';
-  const url = `${baseUrl}${sep}per_page=${per}&orderby=date&_fields=link,date_gmt,title,excerpt`;
+  // STEP 3: request `content` too. It is used IN MEMORY only (gated → extractor →
+  // content_terms); it is never stored. excerpt.rendered remains the ONLY source
+  // of raw_excerpt.
+  const url = `${baseUrl}${sep}per_page=${per}&orderby=date&_fields=link,date_gmt,title,excerpt,content`;
   const doFetch = async (): Promise<Response> => {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 25_000);
@@ -375,15 +440,26 @@ export async function fetchWpRest(baseUrl: string, opts: { perPage?: number } = 
     const title = decodeEntities(stripHtml(String(p?.title?.rendered ?? ''))).trim();
     if (!link || !title) continue;
     const gmt = p?.date_gmt ? String(p.date_gmt) : null;
+    // Publisher excerpt (the ONLY thing eligible to become raw_excerpt), capped 500.
+    const excerptText = decodeEntities(stripHtml(String(p?.excerpt?.rendered ?? ''))).trim();
+    // Full content — IN MEMORY ONLY, for content_terms extraction.
+    const contentText = decodeEntities(stripHtml(String(p?.content?.rendered ?? ''))).trim();
+    const sel = selectAndExtract(title, contentText, excerptText);
+    // STORAGE RULE: raw_excerpt ALWAYS from excerpt.rendered; if the excerpt itself
+    // fails the gate (boilerplate/too-short), store EMPTY rather than publish garbage.
+    const rawExcerpt = gateText(title, excerptText).ok ? excerptText.slice(0, 500) : '';
     out.push({
       title,
       url: stripCacheBust(link),
       author: null,
       published_at: gmt ? (/[Zz]$/.test(gmt) ? gmt : gmt + 'Z') : null,
-      excerpt: decodeEntities(stripHtml(String(p?.excerpt?.rendered ?? ''))).trim().slice(0, 500),
+      excerpt: rawExcerpt,
       image_url: null,
       published_at_source: 'original',
       published_at_confidence: 'high',
+      content_terms: sel.content_terms,
+      text_source: sel.text_source,
+      gate_reason: sel.gate_reason,
     });
   }
   return out;

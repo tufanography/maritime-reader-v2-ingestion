@@ -6,6 +6,7 @@ import { categorizeByRules, extractSummary } from '../ai/rules';
 import type { Source, Category } from '../supabase/types';
 import { fetchRss, fetchWpRest, type RawArticle } from './rss';
 import { fetchHtmlSource, FetchError, type HtmlScraperConfig } from './html';
+import { formatFetchError, parseStatusFromError } from './fetch-health';
 import { hashUrl, sleep } from './util';
 import { looksLikeArticle } from './quality';
 import { moderate } from './moderation';
@@ -14,8 +15,22 @@ import { extractTagIds } from '../tagging/extract';
 import { extractKeywords } from '../tagging/keywords';
 import { deriveDocumentType } from '../v3/document-type';
 import { deriveSegments } from '../v3/segments';
+import type { SupabaseClient } from '@supabase/supabase-js';
 
 const USE_AI = !!process.env.ANTHROPIC_API_KEY;
+
+// STEP 3: content_terms / text_source / gate_reason are added by migration 040.
+// Probe ONCE per process so the scraper stays SAFE if it is ever deployed before
+// the migration is applied — a missing column would otherwise 400 EVERY insert
+// (total ingestion outage). When absent we simply omit the fields.
+let _ctColsReady: boolean | null = null;
+async function contentTermsColumnsReady(sb: SupabaseClient): Promise<boolean> {
+  if (_ctColsReady !== null) return _ctColsReady;
+  const { error } = await sb.from('articles').select('content_terms').limit(1);
+  _ctColsReady = !error;
+  if (error) console.warn('  [content_terms] columns absent (migration 040 not applied) — skipping term storage this run');
+  return _ctColsReady;
+}
 
 export type ScrapeResult = {
   source_id: string;
@@ -130,7 +145,9 @@ export async function fetchRaw(source: Source): Promise<RawArticle[]> {
       if (hasFeeds) {
         for (const feed of config.rss_feeds!) {
           try { all.push(...await fetchRss(feed, { skipOgImage: true })); }
-          catch (e) { console.error(`supplemental feed failed for ${source.name}: ${feed} — ${e instanceof Error ? e.message : String(e)}`); }
+          // B1: classify the HTTP code (403 blocked vs 404 gone) instead of a bare
+          // message — an additive-path 403 used to read like "success + 0 links".
+          catch (e) { console.error(`supplemental feed failed for ${source.name}: ${feed} — ${formatFetchError(e)}`); }
         }
       }
     }
@@ -143,7 +160,9 @@ export async function fetchRaw(source: Source): Promise<RawArticle[]> {
   // stale feed missed. Configured per source via scraper_config.wp_rest_url.
   if (rawCfg.wp_rest_url) {
     try { all.push(...await fetchWpRest(rawCfg.wp_rest_url, { perPage: rawCfg.wp_rest_per_page })); }
-    catch (e) { console.error(`WP REST failed for ${source.name}: ${rawCfg.wp_rest_url} — ${e instanceof Error ? e.message : String(e)}`); }
+    // B1: an additive WP REST 403 (Splash247's exact failure) was the flagged
+    // "biggest silent failure" — now logged with its classified HTTP code.
+    catch (e) { console.error(`WP REST failed for ${source.name}: ${rawCfg.wp_rest_url} — ${formatFetchError(e)}`); }
   }
   return all;
 }
@@ -203,8 +222,11 @@ export async function scrapeSource(source: Source): Promise<ScrapeResult> {
   } catch (err) {
     const blocked =
       err instanceof FetchError && (err.status === 403 || err.status === 429);
-    const message = err instanceof Error ? err.message : String(err);
-    const httpStatus = err instanceof FetchError ? err.status : null;
+    // B1: standardise last_error to `HTTP <code> (<label>) — <msg>` so 403
+    // (blocked, source alive) and 404 (gone, URL/selector wrong) are countable
+    // and visibly distinct in scrape_logs / source health, not one flat string.
+    const message = formatFetchError(err);
+    const httpStatus = parseStatusFromError(err);
     await finishLog({
       status: blocked ? 'blocked' : 'error',
       error_message: message,
@@ -280,6 +302,10 @@ export async function scrapeSource(source: Source): Promise<ScrapeResult> {
   // genuinely undated archive) set `require_date: false` in its config
   // — undefined / true both mean "must have a date".
   const requireDate = (source.scraper_config as { require_date?: boolean } | null)?.require_date !== false;
+
+  // One-time capability probe (see contentTermsColumnsReady) — keeps the insert
+  // safe whether or not migration 040 has been applied.
+  const ctReady = await contentTermsColumnsReady(sb);
 
   for (const { raw, hash } of fresh) {
     // Quality gate: reject CTA / aggregator / nav-landing pages before they
@@ -433,6 +459,13 @@ export async function scrapeSource(source: Source): Promise<ScrapeResult> {
       segments,
       keywords,
       content_quality: contentQuality,
+      // STEP 3: search-recall terms + provenance. Omitted entirely until the
+      // columns exist (see ctReady) so a pre-migration deploy can't break inserts.
+      ...(ctReady ? {
+        content_terms: raw.content_terms ?? null,
+        text_source: raw.text_source ?? null,
+        gate_reason: raw.gate_reason ?? null,
+      } : {}),
     }).select('id').single();
     // An insert failure used to vanish here: no count, no log, and the run still
     // finished 'success' with articles_new=0. A CHECK violation (document_type,
@@ -685,15 +718,41 @@ export async function scrapeAllDue(opts?: { force?: boolean; runner?: 'cloud' | 
   if (sources.length === 0) return [];
 
   const now = Date.now();
+  // 0.8 due-margin: without slack, a source whose due-time lands just AFTER a cron
+  // tick — because its interval isn't a multiple of the 3h cron, or from run-time /
+  // clock jitter — is judged "not due" and waits a FULL extra cron period (a 360-min
+  // source at elapsed 359.7min slips to +9h). Treating it as due at 80% of the
+  // interval lets it ride the current tick. (Measured interval distribution: 150×11,
+  // 240×1, 360×14, 720×16, 1440×15 — the majority is NOT 150, so the "150→6h"
+  // hypothesis is refuted; 150-min sources already scrape every 3h. This margin is a
+  // boundary-robustness fix, not that cure.)
+  const DUE_MARGIN = 0.8;
   const due = sources.filter((s) => {
     if (opts?.force) return true;
     if (!s.last_scraped_at) return true;
     const last = new Date(s.last_scraped_at).getTime();
-    return now - last >= s.scrape_interval_minutes * 60_000;
+    return now - last >= s.scrape_interval_minutes * 60_000 * DUE_MARGIN;
   });
 
   const runnerLabel = opts?.runner ? ` [runner=${opts.runner}]` : '';
   console.log(`scrapeAllDue: ${due.length} source(s) due${opts?.force ? ' (force mode)' : ''}${runnerLabel}`);
+
+  // No-op TRACE: a scheduled tick that finds nothing due currently writes NOTHING to
+  // scrape_logs — indistinguishable from "the cron never fired" (a silent gap). Leave
+  // one row so every tick is accounted for. Requires migration 041 ('noop' status +
+  // nullable source_id); best-effort/logged until it's applied.
+  if (due.length === 0 && !opts?.force) {
+    const { error: noopErr } = await sb.from('scrape_logs').insert({
+      source_id: null,
+      status: 'noop',
+      articles_found: 0,
+      articles_new: 0,
+      error_message: `no sources due (${sources.length} enabled)`,
+      finished_at: new Date().toISOString(),
+    });
+    if (noopErr) console.warn(`no-op trace row insert failed (apply migration 041): ${noopErr.message}`);
+    else console.log('scrapeAllDue: wrote no-op trace row to scrape_logs');
+  }
 
   const results: ScrapeResult[] = [];
   for (let i = 0; i < due.length; i++) {
