@@ -128,7 +128,7 @@ for (const raw of fresh) {
     published_at: ra.published_at,
     published_at_source: ra.published_at_source ?? 'original',
     published_at_confidence: ra.published_at_confidence ?? 'high',
-    raw_excerpt: ra.excerpt.slice(0, 4000),   // ra.excerpt is already excerpt-only, ≤500 (see wpPostToRawArticle)
+    raw_excerpt: ra.excerpt.slice(0, 500),   // ra.excerpt is ALREADY excerpt-only & ≤500 (capped in wpPostToRawArticle: excerptText.slice(0,500)); this is an explicit belt-and-suspenders 500 cap — NEVER 4000 on the raw_excerpt path
     summary: extractSummary(ra.excerpt),
     ai_categorized: false,
     ai_confidence: rules.confidence,
