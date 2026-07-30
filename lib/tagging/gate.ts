@@ -81,6 +81,7 @@ const TERM_LEADING_STOP = new Set<string>([
   'meanwhile', 'however', 'also', 'unlike', 'despite', 'during', 'since', 'though',
   'although', 'officials', 'official', 'authorities', 'authority', 'general', 'built',
   'added', 'earlier', 'later', 'overall',
+  'by',   // drops wire-service byline fragments: "By Marwa Rashad", "By Jonathan Saul"
 ]);
 
 const TERM_CONNECTORS = new Set<string>(['of', 'the', 'and', 'for', 'de', 'del', 'la', 'le', 'du', 'von', 'van', '&']);

@@ -36,6 +36,15 @@ function distinctiveTitlePhrase(title) {
   }
   return best;
 }
+const escLike = (s) => s.replace(/[%_\\]/g, (m) => '\\' + m);
+async function dbArticleFreq(term) {
+  const pat = `%${escLike(term)}%`;
+  const [{ count: ct }, { count: ce }] = await Promise.all([
+    sb.from('articles').select('id', { count: 'exact', head: true }).ilike('title', pat),
+    sb.from('articles').select('id', { count: 'exact', head: true }).ilike('raw_excerpt', pat),
+  ]);
+  return Math.max(ct ?? 0, ce ?? 0);
+}
 async function buildControl() {
   const now = Date.now();
   const from = new Date(now - 60 * 864e5).toISOString(), to = new Date(now - 14 * 864e5).toISOString();
@@ -46,9 +55,14 @@ async function buildControl() {
   for (const a of (data || [])) {
     const ph = distinctiveTitlePhrase(a.title);
     if (ph.length < 2) continue;
-    const q = `"${ph.slice(0, 3).join(' ')}"`;
+    const phrase = ph.slice(0, 3).join(' ');
+    const q = `"${phrase}"`;
     if (out.some((o) => o.query.toLowerCase() === q.toLowerCase())) continue;
-    out.push({ query: q, expected_article_id: a.id, source: 'CONTROL', title: a.title.slice(0, 80) });
+    // SAME rarity rule as the fixture: a control term that matches >3 articles
+    // ("West Coast" → 799) is not a distinctive instrument check — skip it.
+    const freq = await dbArticleFreq(phrase);
+    if (freq > 3) continue;
+    out.push({ query: q, expected_article_id: a.id, source: 'CONTROL', db_freq: freq, title: a.title.slice(0, 80) });
     if (out.length >= 8) break;
   }
   return out;

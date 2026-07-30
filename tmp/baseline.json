@@ -1,43 +1,36 @@
 {
-  "generated_at": "2026-07-30T08:34:44.606Z",
+  "generated_at": "2026-07-30T08:46:25.810Z",
   "site": "https://maritimereader.com/",
   "method": "pagefind-full-result-set",
   "deltaMerged": true,
   "control": [
     {
-      "query": "\"EMEA News\"",
-      "expected_article_id": "a44642cb-297e-480d-9ac3-f6d635c2445a",
+      "query": "\"BIMCO Grain\"",
+      "expected_article_id": "d96e38af-b89a-495a-b7bb-11f44a087a6f",
       "source": "CONTROL",
-      "title": "EMEA News",
+      "db_freq": 0,
+      "title": "BIMCO: Grain shipments surge 13% but weaker outlook emerges",
       "in_set": true,
-      "rank": 98,
-      "total": 257,
-      "scanned": 150
+      "rank": 1,
+      "total": 3,
+      "scanned": 3
     },
     {
-      "query": "\"World News\"",
-      "expected_article_id": "fb58a521-af68-436f-a179-3d924c76e9f9",
+      "query": "\"SeaIntelligence Structural Contraction\"",
+      "expected_article_id": "32cdec82-6679-4d41-ba88-a3130443015f",
       "source": "CONTROL",
-      "title": "World News",
-      "in_set": false,
-      "rank": -1,
-      "total": 350,
-      "scanned": 150
-    },
-    {
-      "query": "\"Americas News\"",
-      "expected_article_id": "4c6d8c8d-ae56-4c2f-a9a0-78e550ca518c",
-      "source": "CONTROL",
-      "title": "Americas News",
+      "db_freq": 0,
+      "title": "Sea-Intelligence: Structural Contraction of Global Liner Networks",
       "in_set": true,
-      "rank": 30,
-      "total": 54,
-      "scanned": 54
+      "rank": 1,
+      "total": 1,
+      "scanned": 1
     },
     {
       "query": "\"Chinas Newest TargetPractice\"",
       "expected_article_id": "c1edf18f-fef9-4428-b209-917703395707",
       "source": "CONTROL",
+      "db_freq": 0,
       "title": "China's Newest Target-Practice \"Ship\" Looks Exactly Like a U.S. Destroyer",
       "in_set": true,
       "rank": 1,
@@ -48,6 +41,7 @@
       "query": "\"US Launches New\"",
       "expected_article_id": "d9149715-e3a4-41d0-ae42-f12ff89d8016",
       "source": "CONTROL",
+      "db_freq": 1,
       "title": "U.S. Launches New Wave of Strikes on Targets in Iran",
       "in_set": true,
       "rank": 5,
@@ -58,6 +52,7 @@
       "query": "\"Turkish FSRU\"",
       "expected_article_id": "41970d8a-87ef-4ffc-94e6-a9858715634f",
       "source": "CONTROL",
+      "db_freq": 1,
       "title": "Wärtsilä lands lifecycle contract for Turkish FSRU",
       "in_set": true,
       "rank": 1,
@@ -65,24 +60,37 @@
       "scanned": 1
     },
     {
-      "query": "\"Gulf Marine Services\"",
-      "expected_article_id": "b427dd2a-2621-421a-a6a4-d54d7f2c1f36",
-      "source": "CONTROL",
-      "title": "Gulf Marine Services locks in four-year offshore Brazil assignment",
-      "in_set": true,
-      "rank": 8,
-      "total": 23,
-      "scanned": 23
-    },
-    {
       "query": "\"Suriname FPSO\"",
       "expected_article_id": "293c2e53-ae2e-4d18-9a5b-77dc5825c40c",
       "source": "CONTROL",
+      "db_freq": 2,
       "title": "Suriname FPSO to trial kite-assisted towing",
       "in_set": true,
       "rank": 2,
       "total": 3,
       "scanned": 3
+    },
+    {
+      "query": "\"Splash Singapore Christoph\"",
+      "expected_article_id": "831c3d89-8906-4d79-8b81-baf6b9f11b36",
+      "source": "CONTROL",
+      "db_freq": 0,
+      "title": "Splash Singapore: Christoph Toepfer on the lingering aftereffects from Hormuz",
+      "in_set": true,
+      "rank": 1,
+      "total": 1,
+      "scanned": 1
+    },
+    {
+      "query": "\"Plastic Pellets Nurdles\"",
+      "expected_article_id": "a5dc8d26-8da9-498d-a543-84be140e418f",
+      "source": "CONTROL",
+      "db_freq": 0,
+      "title": "Plastic Pellets (Nurdles): India Moves Ahead with Targeted Controls",
+      "in_set": true,
+      "rank": 5,
+      "total": 12,
+      "scanned": 12
     }
   ],
   "control_ok": true,
@@ -379,7 +387,7 @@
   "summary": {
     "control": {
       "total": 8,
-      "in_set": 7
+      "in_set": 8
     },
     "fixture": {
       "total": 24,
