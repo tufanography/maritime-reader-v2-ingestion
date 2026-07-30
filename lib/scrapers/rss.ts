@@ -436,31 +436,41 @@ export async function fetchWpRest(baseUrl: string, opts: { perPage?: number } = 
   if (!Array.isArray(posts)) return [];
   const out: RawArticle[] = [];
   for (const p of posts as any[]) {
-    const link: string | undefined = p?.link;
-    const title = decodeEntities(stripHtml(String(p?.title?.rendered ?? ''))).trim();
-    if (!link || !title) continue;
-    const gmt = p?.date_gmt ? String(p.date_gmt) : null;
-    // Publisher excerpt (the ONLY thing eligible to become raw_excerpt), capped 500.
-    const excerptText = decodeEntities(stripHtml(String(p?.excerpt?.rendered ?? ''))).trim();
-    // Full content — IN MEMORY ONLY, for content_terms extraction.
-    const contentText = decodeEntities(stripHtml(String(p?.content?.rendered ?? ''))).trim();
-    const sel = selectAndExtract(title, contentText, excerptText);
-    // STORAGE RULE: raw_excerpt ALWAYS from excerpt.rendered; if the excerpt itself
-    // fails the gate (boilerplate/too-short), store EMPTY rather than publish garbage.
-    const rawExcerpt = gateText(title, excerptText).ok ? excerptText.slice(0, 500) : '';
-    out.push({
-      title,
-      url: stripCacheBust(link),
-      author: null,
-      published_at: gmt ? (/[Zz]$/.test(gmt) ? gmt : gmt + 'Z') : null,
-      excerpt: rawExcerpt,
-      image_url: null,
-      published_at_source: 'original',
-      published_at_confidence: 'high',
-      content_terms: sel.content_terms,
-      text_source: sel.text_source,
-      gate_reason: sel.gate_reason,
-    });
+    const ra = wpPostToRawArticle(p);
+    if (ra) out.push(ra);
   }
   return out;
+}
+
+/** Transform ONE WordPress REST post object into a RawArticle — the single source
+ *  of truth for wp-post → row shape, incl. the content_terms extraction and the
+ *  raw_excerpt storage rule. Reused by fetchWpRest AND the archive backfill
+ *  (scripts/backfill-archive.ts) so a windowed backfill produces IDENTICAL rows to
+ *  a normal scrape. Returns null when the post has no link/title. */
+export function wpPostToRawArticle(p: any): RawArticle | null {
+  const link: string | undefined = p?.link;
+  const title = decodeEntities(stripHtml(String(p?.title?.rendered ?? ''))).trim();
+  if (!link || !title) return null;
+  const gmt = p?.date_gmt ? String(p.date_gmt) : null;
+  // Publisher excerpt (the ONLY thing eligible to become raw_excerpt), capped 500.
+  const excerptText = decodeEntities(stripHtml(String(p?.excerpt?.rendered ?? ''))).trim();
+  // Full content — IN MEMORY ONLY, for content_terms extraction.
+  const contentText = decodeEntities(stripHtml(String(p?.content?.rendered ?? ''))).trim();
+  const sel = selectAndExtract(title, contentText, excerptText);
+  // STORAGE RULE: raw_excerpt ALWAYS from excerpt.rendered; if the excerpt itself
+  // fails the gate (boilerplate/too-short), store EMPTY rather than publish garbage.
+  const rawExcerpt = gateText(title, excerptText).ok ? excerptText.slice(0, 500) : '';
+  return {
+    title,
+    url: stripCacheBust(link),
+    author: null,
+    published_at: gmt ? (/[Zz]$/.test(gmt) ? gmt : gmt + 'Z') : null,
+    excerpt: rawExcerpt,
+    image_url: null,
+    published_at_source: 'original',
+    published_at_confidence: 'high',
+    content_terms: sel.content_terms,
+    text_source: sel.text_source,
+    gate_reason: sel.gate_reason,
+  };
 }
