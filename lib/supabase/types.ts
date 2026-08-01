@@ -29,6 +29,10 @@ export type Source = {
   /** Round-robin pointer for scraper_config.job_groups. Modulo the live
    *  group count at read time so changing group counts is safe. */
   last_group_index: number;
+  /** High-water-mark: has this source EVER returned >0 articles. A boolean GATE
+   *  only (never a threshold) — the silent-death alarm skips sources where this
+   *  is false (new/unproven) so they cannot false-alarm. */
+  peak_found?: boolean;
   /** trusted: P&I/MOU/class/regulator — direct publish at content_quality='visible'.
    *  aggregator: WordPress feeds with off-topic noise — content_quality='pending'
    *  on insert; the AI tagger updates them once classified. */
@@ -165,7 +169,7 @@ export type ScrapeLog = {
   source_id: string;
   started_at: string;
   finished_at: string | null;
-  status: 'running' | 'success' | 'error' | 'blocked' | 'partial';
+  status: 'running' | 'success' | 'error' | 'blocked' | 'partial' | 'noop' | 'empty' | 'unknown';
   articles_found: number;
   articles_new: number;
   error_message: string | null;

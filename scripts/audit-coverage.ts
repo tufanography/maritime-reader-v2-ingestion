@@ -119,6 +119,18 @@ export async function runAudit(topNames: string[]) {
     const foundCollapse = noRecentCapture && med >= FOUND_BASELINE_MIN && latest2.length >= 2 && latest2.every((f: number) => f < Math.max(2, med * 0.3));
     const silent = noRecentCapture && med === 0 && founds.length >= 4;
 
+    // SILENT_DEATH — N=10 consecutive found=0 runs on a source that HAS produced
+    // before (peak_found). Threshold DERIVED from measured self-recovery series
+    // (Shipowners 7, Black Sea 5, Splash/MC 2 → N=10 clears the noise floor with
+    // margin). Counts articles_found (production truth), NOT last_status. The
+    // peak_found gate means a never-proven (new) source can NEVER alarm. Distinct
+    // from SILENT (publish-cadence based) — this is a pure run-count streak, so it
+    // still fires on sources with no reliable published_at baseline (the exact case
+    // American P&I's 39-day PDF death fell into). N will be tightened once the
+    // Shipowners/Black Sea series get a git-check (they may also be repairs → lower floor).
+    const zeroStreak = (() => { let n = 0; for (const f of founds) { if (f === 0) n++; else break; } return n; })();
+    const silentDeath = src.peak_found === true && zeroStreak >= 10;
+
     // SIGNAL 2 — coverage gap. Run the REAL production extraction (so no
     // divergence on rss/sitemap/requires_js), then do the DB-presence check
     // HERE: fetchRaw does NOT filter the rss / rss_feeds branches by knownUrls,
@@ -160,6 +172,7 @@ export async function runAudit(topNames: string[]) {
 
     const flags: string[] = [];
     if (errStreak) flags.push('ERROR_STREAK');
+    if (silentDeath) flags.push('SILENT_DEATH');
     if (silent) flags.push('SILENT');
     else if (foundCollapse) flags.push('FOUND_COLLAPSE');
     if (chronicReject) flags.push('CHRONIC_REJECTION');
@@ -170,7 +183,7 @@ export async function runAudit(topNames: string[]) {
     const lagNote = (feedLagH != null && feedLagH > FEED_LAG_HOURS)
       ? `our newest article is ${Math.round(feedLagH)}h behind ${name}'s LIVE feed — the scraper looks healthy (found ${med}/run) but is serving stale content`
       : undefined;
-    report.push({ name, type: src.type, foundMedian: med, latestFound: latest2, foundSum, newSum, daysSinceCapture, extracted: extractedTotal, uncaptured: uncaptured.length, feedLagH: feedLagH == null ? null : Math.round(feedLagH), note: lagNote, flags, sample: uncaptured.slice(0, 4), covErr });
+    report.push({ name, type: src.type, foundMedian: med, latestFound: latest2, foundSum, newSum, zeroStreak, peakFound: src.peak_found === true, daysSinceCapture, extracted: extractedTotal, uncaptured: uncaptured.length, feedLagH: feedLagH == null ? null : Math.round(feedLagH), note: lagNote, flags, sample: uncaptured.slice(0, 4), covErr });
     if (flags.length) console.log(`  ${name.padEnd(26)} found(med ${med}, Σ${foundSum}/new Σ${newSum}) lastCap ${daysSinceCapture}d${feedLagH != null ? ' feedLag ' + feedLagH.toFixed(0) + 'h' : ''} | not-in-DB ${covErr ? 'ERR' : uncaptured.length} ⚠ ${flags.join(',')}`);
   }
   return report;

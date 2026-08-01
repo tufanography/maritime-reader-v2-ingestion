@@ -424,8 +424,10 @@ export async function fetchWpRest(baseUrl: string, opts: { perPage?: number } = 
   };
   // Cloudflare intermittently 403s the datacenter IP on Splash-class WAFs (MEASURED
   // 2026-07-17), and gateways flake 5xx. Retry ONCE with a fresh UA + short wait.
+  // 415 included for parity with the RSS path (line 185): CF WAFs return 415 on a
+  // Sec-Fetch mismatch (this 415'd Maritime Cyprus & Splash247) — retryable, not fatal.
   let res = await doFetch();
-  if ([403, 429, 502, 503, 504].includes(res.status)) {
+  if ([403, 415, 429, 502, 503, 504].includes(res.status)) {
     try { await res.text(); } catch { /* */ }
     await sleep(5_000 + Math.floor(Math.random() * 5_000));
     res = await doFetch();

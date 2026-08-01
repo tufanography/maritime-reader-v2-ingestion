@@ -35,7 +35,7 @@ async function contentTermsColumnsReady(sb: SupabaseClient): Promise<boolean> {
 export type ScrapeResult = {
   source_id: string;
   source_name: string;
-  status: 'success' | 'error' | 'blocked' | 'partial';
+  status: 'success' | 'error' | 'blocked' | 'partial' | 'empty' | 'unknown';
   found: number;
   inserted: number;
   error?: string;
@@ -501,7 +501,16 @@ export async function scrapeSource(source: Source): Promise<ScrapeResult> {
     if (USE_AI) await sleep(150);
   }
 
-  const status: ScrapeResult['status'] = aiErrors > 0 && inserted > 0 ? 'partial' : 'success';
+  // HONEST STATE (was: always 'success' even when found=0 — the ghost-success that
+  // let PDF-dead-39-days log success on every tick). A 0-article run is now labelled
+  // by WHY: 'empty' = fetch OK but source (which HAS produced before) returned nothing
+  // → worth alarming if it persists; 'unknown' = 0 found and never produced → a new/
+  // unproven source, which must NEVER alarm. (Real blocks 403/429 throw and are
+  // labelled 'blocked' in the catch above, so here the fetch always succeeded.)
+  let status: ScrapeResult['status'];
+  if (raws.length > 0) status = aiErrors > 0 && inserted > 0 ? 'partial' : 'success';
+  else if (source.peak_found) status = 'empty';
+  else status = 'unknown';
   const errorParts: string[] = [];
   if (aiErrors > 0) errorParts.push(`${aiErrors} ai failures`);
   if (rejectedQuality > 0) errorParts.push(`${rejectedQuality} rejected by quality filter`);
@@ -527,12 +536,21 @@ export async function scrapeSource(source: Source): Promise<ScrapeResult> {
     articles_found: raws.length,
     articles_new: inserted,
     error_message: errorParts.length ? errorParts.join('; ') : null,
+    // Reaching here means the fetch succeeded (403/429/5xx throw FetchError and are
+    // handled in the catch). Record 200 on success too — not just on failure — so the
+    // audit can later tell a 200-empty (0 found but reachable) from a block. Start
+    // collecting the reason data today; the cause-based alarm is built later. (2026-08)
+    http_status: 200,
   });
   await sb.from('sources').update({
     last_scraped_at: new Date().toISOString(),
     last_status: status,
     last_error: null,
     last_group_index: (source.last_group_index ?? 0) + 1,
+    // High-water-mark: the first time a source EVER produces, latch peak_found true
+    // (never unset). Boolean gate only — the silent-death alarm uses it to skip
+    // never-proven sources. No-op write once already true.
+    ...(raws.length > 0 && !source.peak_found ? { peak_found: true } : {}),
   }).eq('id', source.id);
 
   return {
