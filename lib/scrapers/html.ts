@@ -291,6 +291,18 @@ export type HtmlScraperConfig = {
    *  (Laravel/Inertia, Vue/React app shells, etc.). Verified via the
    *  Phase E POC for NorthStandard. */
   requires_js?: boolean;
+  /** Playwright goto strategy override for this source. Default
+   *  'networkidle' (wait for the network to go quiet). Set to
+   *  'domcontentloaded' for chatty JS sites — notably Wix — whose
+   *  background polling means networkidle NEVER fires, so the default
+   *  path 45s-timeouts and captures nothing. Pair with js_wait_selector
+   *  so we still block until the real content has client-rendered. */
+  js_wait_until?: 'load' | 'domcontentloaded' | 'networkidle';
+  /** CSS selector Playwright waits for after goto (capped, non-fatal).
+   *  For JS sites whose list cards render after the initial document —
+   *  block until the first card exists instead of guessing a fixed
+   *  delay. Only consulted on the requires_js path. */
+  js_wait_selector?: string;
   list_card_selector?: string;   // outer card wrapper (one per article)
   list_title_selector?: string;  // selector relative to card
   list_date_selector?: string;
@@ -426,13 +438,23 @@ function browserHeaders(): Record<string, string> {
   };
 }
 
-async function fetchHtml(url: string, opts: { requiresJs?: boolean } = {}): Promise<string> {
+async function fetchHtml(
+  url: string,
+  opts: {
+    requiresJs?: boolean;
+    waitUntil?: 'load' | 'domcontentloaded' | 'networkidle';
+    waitSelector?: string;
+  } = {},
+): Promise<string> {
   if (opts.requiresJs) {
     // Lazy import keeps the Playwright/Chromium dependency out of the hot
     // path for sources that don't need it — most scrape runs never touch
     // this module and shouldn't pay the import cost.
     const { fetchHtmlWithPlaywright } = await import('./playwright-fetcher');
-    return fetchHtmlWithPlaywright(url);
+    return fetchHtmlWithPlaywright(url, {
+      waitUntil: opts.waitUntil,
+      waitSelector: opts.waitSelector,
+    });
   }
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 25_000);
@@ -618,7 +640,7 @@ export async function fetchHtmlSource(args: {
   // HTML — e.g. ABS newsroom (each card has h2 + .publish-date + img + a).
   if (config.list_only) {
     if (!config.list_url) throw new Error('list_only mode requires list_url');
-    const indexHtml = await fetchHtml(config.list_url, { requiresJs: config.requires_js });
+    const indexHtml = await fetchHtml(config.list_url, { requiresJs: config.requires_js, waitUntil: config.js_wait_until, waitSelector: config.js_wait_selector });
     const $ = cheerio.load(indexHtml);
     const cardSel = config.list_card_selector ?? 'article, .card, .post';
     const titleSel = config.list_title_selector ?? 'h2, h3';
@@ -730,7 +752,7 @@ export async function fetchHtmlSource(args: {
       const lu = listPageUrls[p];
       let indexHtml: string;
       try {
-        indexHtml = await fetchHtml(lu, { requiresJs: config.requires_js });
+        indexHtml = await fetchHtml(lu, { requiresJs: config.requires_js, waitUntil: config.js_wait_until, waitSelector: config.js_wait_selector });
       } catch (err) {
         // First page must succeed — re-throw so the source is marked
         // blocked/error. For paginated runs, a 404 typically means we ran
@@ -905,7 +927,10 @@ export async function fetchHtmlSource(args: {
         };
       }
 
-      const html = await fetchHtml(link, { requiresJs: config.requires_js });
+      // Detail pages get the goto-strategy override (chatty Wix/JS sites
+      // otherwise hang on networkidle) but NOT the list card selector —
+      // that markup only exists on the listing page.
+      const html = await fetchHtml(link, { requiresJs: config.requires_js, waitUntil: config.js_wait_until });
       const $ = cheerio.load(html);
 
       // Trim each candidate BEFORE the || short-circuit. Some sites

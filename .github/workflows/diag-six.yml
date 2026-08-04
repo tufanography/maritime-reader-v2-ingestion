@@ -1,0 +1,47 @@
+# TEMPORARY diagnostic. Delete once answered.
+# Q: 6 sources capture 0 from the GHA runner but are FULL from a home IP.
+#    Is the runner IP blocked, or is it our fetch code? Probe all 6 list_urls
+#    from the runner: HTTP code, body size, raw <a> count, selector-link count.
+#    Compare side-by-side with residential (Panama 998 / Britannia 25 /
+#    Med MoU 17 / USCG 10 / Caribbean 7 / Black Sea 5).
+name: diag-six
+on: workflow_dispatch
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: runner egress IP
+        run: curl -s https://ifconfig.me; echo
+      - name: probe 6 list_urls from runner
+        run: |
+          cat > _diag6.mjs <<'JS'
+          const UA='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
+          const H={'User-Agent':UA,'Accept':'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8','Accept-Language':'en-US,en;q=0.9'};
+          const SIG=['just a moment','checking your browser','being verified','cf_chl','enable javascript','attention required','captcha'];
+          const esc=s=>s.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+          const SRC=[
+            {name:'Panama',   url:'https://pancanal.com/en/maritime-services/advisory-to-shipping/', sub:'/wp-content/uploads/', res:998},
+            {name:'Britannia',url:'https://britanniapandi.com/knowledge-result/',                    sub:'britanniapandi.com/202', res:25},
+            {name:'Med MoU',  url:'https://www.medmou.org/',                                          sub:'Documents/',        res:17},
+            {name:'USCG',     url:'https://www.news.uscg.mil/Press-Releases/',                        sub:'/Press-Releases/Article/', res:10},
+            {name:'Caribbean',url:'https://www.caribbeanmou.org/latest-news',                         sub:'/news/',            res:7},
+            {name:'BlackSea', url:'https://bsmou.org/category/news/',                                 sub:'bsmou.org/20',      res:5},
+          ];
+          for(const s of SRC){
+            try{
+              const r=await fetch(s.url,{headers:H,redirect:'follow'});
+              const b=await r.text();
+              const raw=(b.match(/<a\s[^>]*href=/gi)||[]).length;
+              const re=new RegExp('href=["\'][^"\']*'+esc(s.sub)+'[^"\']*','gi');
+              const all=b.match(re)||[];
+              const sel=new Set(all.filter(h=>{const u=h.replace(/^href=["']/,'');return u.replace(/\/$/,'')!==s.url.replace(/\/$/,'')&&u!==s.sub;})).size;
+              const low=b.slice(0,8000).toLowerCase();
+              const ch=SIG.filter(x=>low.includes(x)).join(',');
+              const cf=r.headers.get('cf-mitigated')||'-';
+              console.log(`RESULT ${s.name.padEnd(10)} res=${String(s.res).padStart(4)} | HTTP ${r.status} ${String(b.length).padStart(7)}b raw<a>=${String(raw).padStart(4)} sel[${s.sub}]=${sel} cf=${cf}${ch?' CHALLENGE:'+ch:''}${r.url!==s.url?' →'+r.url.slice(0,50):''}`);
+            }catch(e){ console.log(`RESULT ${s.name.padEnd(10)} THREW ${String(e.message).slice(0,70)}`); }
+          }
+          JS
+          node _diag6.mjs

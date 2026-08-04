@@ -74,7 +74,16 @@ async function dismissCookieBanner(page: Page): Promise<boolean> {
 
 export async function fetchHtmlWithPlaywright(
   url: string,
-  opts: { timeoutMs?: number; waitUntil?: 'load' | 'domcontentloaded' | 'networkidle' } = {},
+  opts: {
+    timeoutMs?: number;
+    waitUntil?: 'load' | 'domcontentloaded' | 'networkidle';
+    /** When set, block (capped, non-fatal) until this selector exists after
+     *  goto — for JS sites whose real content renders after the initial
+     *  document. Paired with waitUntil:'domcontentloaded' this replaces the
+     *  networkidle wait that never settles on chatty sites (e.g. Wix). */
+    waitSelector?: string;
+    selectorTimeoutMs?: number;
+  } = {},
 ): Promise<string> {
   const ctx = await getContext();
   const page = await ctx.newPage();
@@ -83,6 +92,14 @@ export async function fetchHtmlWithPlaywright(
       waitUntil: opts.waitUntil ?? 'networkidle',
       timeout: opts.timeoutMs ?? 45000,
     });
+    if (opts.waitSelector) {
+      // Non-fatal: if the selector never shows we still return whatever
+      // rendered — extraction downstream simply finds no items rather than
+      // the whole fetch throwing.
+      await page
+        .waitForSelector(opts.waitSelector, { timeout: opts.selectorTimeoutMs ?? 12000 })
+        .catch(() => {});
+    }
     if (!cookieConsentDismissed) {
       const ok = await dismissCookieBanner(page);
       if (ok) {
