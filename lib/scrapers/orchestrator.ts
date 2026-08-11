@@ -73,7 +73,7 @@ function selectActiveConfig(source: Source): HtmlScraperConfig {
 // rather than re-implementing it — a re-implementation diverged and false-flagged
 // healthy sitemap/RSS sources (Gard) as broken. Read-only; no insert side effects.
 export async function fetchRaw(source: Source): Promise<RawArticle[]> {
-  const rawCfg = (source.scraper_config ?? {}) as HtmlScraperConfig & { skip_og_image?: boolean; wp_rest_url?: string; wp_rest_per_page?: number };
+  const rawCfg = (source.scraper_config ?? {}) as HtmlScraperConfig & { skip_og_image?: boolean; wp_rest_url?: string; wp_rest_urls?: string[]; wp_rest_per_page?: number };
   const all: RawArticle[] = [];
 
   if (source.type === 'rss') {
@@ -84,8 +84,8 @@ export async function fetchRaw(source: Source): Promise<RawArticle[]> {
     const config = selectActiveConfig(source);
     const hasJob = !!config?.list_url || !!config?.sitemap_url || (config?.jobs && config.jobs.length > 0);
     const hasFeeds = !!rawCfg?.rss_feeds && rawCfg.rss_feeds.length > 0;
-    if (!hasJob && !hasFeeds && !rawCfg.wp_rest_url) {
-      throw new Error('html source missing scraper_config.list_url, sitemap_url, jobs, job_groups, rss_feeds, or wp_rest_url');
+    if (!hasJob && !hasFeeds && !rawCfg.wp_rest_url && !(rawCfg.wp_rest_urls?.length)) {
+      throw new Error('html source missing scraper_config.list_url, sitemap_url, jobs, job_groups, rss_feeds, wp_rest_url, or wp_rest_urls');
     }
     if (hasJob || hasFeeds) {
       const sb = createServiceClient();
@@ -157,12 +157,21 @@ export async function fetchRaw(source: Source): Promise<RawArticle[]> {
   // fresh when a CDN hands the scraper a STALE cached RSS feed (Splash247, 2026-07-17).
   // Best-effort: an intermittent Cloudflare 403 must NOT kill the primary results, and
   // url_hash dedup downstream keeps the richer primary copy and only ADDS what the
-  // stale feed missed. Configured per source via scraper_config.wp_rest_url.
-  if (rawCfg.wp_rest_url) {
-    try { all.push(...await fetchWpRest(rawCfg.wp_rest_url, { perPage: rawCfg.wp_rest_per_page })); }
+  // stale feed missed. Configured per source via scraper_config.wp_rest_url (single)
+  // or wp_rest_urls (array): a WordPress site exposes several custom post types — e.g.
+  // Swedish Club's posts + lp-advice, each at its own /wp/v2/<type> endpoint — and one
+  // source pulls them all. NOTE: publications is deliberately NOT listed here: its REST
+  // content.rendered is empty (metadata-only) AND 42/79 overlap lp-advice at a different
+  // URL, so REST-ingesting it would write body-less stubs + url-dedup-proof duplicates.
+  const restUrls = [
+    ...(rawCfg.wp_rest_url ? [rawCfg.wp_rest_url] : []),
+    ...(Array.isArray(rawCfg.wp_rest_urls) ? rawCfg.wp_rest_urls : []),
+  ];
+  for (const restUrl of restUrls) {
+    try { all.push(...await fetchWpRest(restUrl, { perPage: rawCfg.wp_rest_per_page })); }
     // B1: an additive WP REST 403 (Splash247's exact failure) was the flagged
     // "biggest silent failure" — now logged with its classified HTTP code.
-    catch (e) { console.error(`WP REST failed for ${source.name}: ${rawCfg.wp_rest_url} — ${formatFetchError(e)}`); }
+    catch (e) { console.error(`WP REST failed for ${source.name}: ${restUrl} — ${formatFetchError(e)}`); }
   }
   return all;
 }
