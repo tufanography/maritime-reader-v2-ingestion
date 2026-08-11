@@ -459,9 +459,16 @@ export function wpPostToRawArticle(p: any): RawArticle | null {
   // Full content — IN MEMORY ONLY, for content_terms extraction.
   const contentText = decodeEntities(stripHtml(String(p?.content?.rendered ?? ''))).trim();
   const sel = selectAndExtract(title, contentText, excerptText);
-  // STORAGE RULE: raw_excerpt ALWAYS from excerpt.rendered; if the excerpt itself
-  // fails the gate (boilerplate/too-short), store EMPTY rather than publish garbage.
-  const rawExcerpt = gateText(title, excerptText).ok ? excerptText.slice(0, 500) : '';
+  // STORAGE RULE: prefer the publisher excerpt.rendered. But some WP custom post
+  // types ship an EMPTY excerpt with full content (Swedish Club's lp-advice: 0-char
+  // excerpt, full body) — stored '' they then fail looksLikeArticle's "excerpt too
+  // short" gate and vanish despite being real, full articles. So when the excerpt is
+  // ABSENT (not merely boilerplate), fall back to the article's own GATED content for
+  // a teaser; if the excerpt exists but fails the gate, still store EMPTY (don't
+  // publish boilerplate). Sources that ship a real excerpt (posts) are unaffected.
+  const rawExcerpt = gateText(title, excerptText).ok
+    ? excerptText.slice(0, 500)
+    : (!excerptText && gateText(title, contentText).ok ? contentText.slice(0, 500) : '');
   return {
     title,
     url: stripCacheBust(link),
