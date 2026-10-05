@@ -210,6 +210,34 @@ export async function fetchKnownHashes(
   return { known };
 }
 
+/** Normalise a looksLikeArticle rejection reason into one of the stable audit
+ *  categories used by the coverage audit and the machine-readable reject log.
+ *  Keeping this mapping in ONE place means the daily audit and the per-run log
+ *  can never drift into two different vocabularies. */
+export function classifyRejectReason(reason: string): string {
+  if (reason === 'login_wall') return 'login_wall';
+  if (/^url matches junk path/.test(reason)) return 'non_article_page';
+  if (/CTA fragments/.test(reason)) return 'non_article_page';
+  if (/^title too short/.test(reason)) return 'bad_title';
+  if (/^title matches junk pattern/.test(reason)) return 'bad_title';
+  if (/locked-content/.test(reason)) return 'insufficient_content';
+  if (/^excerpt too short/.test(reason)) return 'insufficient_content';
+  if (/mostly junk phrase/.test(reason)) return 'insufficient_content';
+  return 'other_quality';
+}
+
+/** Small fixed-size bucket accumulator: per-category counts + up to 3 sample
+ *  URLs each. Used to turn "N rejected" into "N rejected: 2 login_wall, 1
+ *  insufficient_content (+ example URLs)" WITHOUT storing article bodies or
+ *  unbounded data. */
+type RejectAudit = { counts: Record<string, number>; samples: Record<string, string[]> };
+function newRejectAudit(): RejectAudit { return { counts: {}, samples: {} }; }
+function addReject(a: RejectAudit, category: string, url: string) {
+  a.counts[category] = (a.counts[category] ?? 0) + 1;
+  const s = (a.samples[category] ??= []);
+  if (s.length < 3) s.push(url);
+}
+
 export async function scrapeSource(source: Source): Promise<ScrapeResult> {
   const sb = createServiceClient();
 
@@ -301,6 +329,10 @@ export async function scrapeSource(source: Source): Promise<ScrapeResult> {
   let rejectedQuality = 0;
   let rejectedNoDate = 0;
   let insertFailed = 0;
+  // Machine-readable per-category breakdown + up to 3 sample URLs each. This is
+  // what turns an opaque "180 found / 0 new" into an actionable "9 missing_date
+  // (+ example URLs)" in both the run log and the daily coverage audit.
+  const rejectAudit = newRejectAudit();
 
   // require_date is now ON BY DEFAULT for every source. Articles whose
   // published_at couldn't be resolved float to the top under created_at
@@ -323,6 +355,7 @@ export async function scrapeSource(source: Source): Promise<ScrapeResult> {
     const verdict = looksLikeArticle({ title: raw.title, excerpt: raw.excerpt, url: raw.url });
     if (!verdict.ok) {
       rejectedQuality++;
+      addReject(rejectAudit, classifyRejectReason(verdict.reason), raw.url);
       continue;
     }
     if (!raw.published_at) {
@@ -352,6 +385,7 @@ export async function scrapeSource(source: Source): Promise<ScrapeResult> {
           // with "today" (the old behaviour that surfaced dateless decades-old
           // circulars as fresh). Drop it instead — honest over complete.
           rejectedNoDate++;
+          addReject(rejectAudit, 'missing_date', raw.url);
           continue;
         }
         raw.published_at = fb.iso;
@@ -359,6 +393,7 @@ export async function scrapeSource(source: Source): Promise<ScrapeResult> {
         raw.published_at_confidence = 'low';
       } else if (requireDate) {
         rejectedNoDate++;
+        addReject(rejectAudit, 'missing_date', raw.url);
         continue;
       }
     }
@@ -486,6 +521,7 @@ export async function scrapeSource(source: Source): Promise<ScrapeResult> {
     // instead of duplicating it — turning a visible problem into an invisible one.
     if (insertErr) {
       insertFailed++;
+      addReject(rejectAudit, 'db_insert_error', raw.url);
       if (insertFailed <= 3) console.error(`  insert failed [${source.name}] ${raw.url}: ${insertErr.message}`);
     }
     if (!insertErr && insertedRow) {
@@ -540,6 +576,32 @@ export async function scrapeSource(source: Source): Promise<ScrapeResult> {
   const accounted = inserted + duplicates + rejectedQuality + rejectedNoDate + insertFailed;
   const unexplained = raws.length - accounted;
   if (unexplained !== 0) errorParts.push(`${unexplained} unexplained drops`);
+
+  // MACHINE-READABLE reject breakdown. Two consumers:
+  //   1. GHA run logs — one grep-able JSON line per source, full detail with
+  //      up to 3 example URLs per category. No article bodies, no secrets.
+  //   2. scrape_logs.error_message — a compact `reason:count` breakdown appended
+  //      to the human summary so the daily coverage audit (which only reads
+  //      scrape_logs, no new column/migration needed) can parse per-category
+  //      counts straight out of the string it already fetches.
+  const rejectTotal = rejectedQuality + rejectedNoDate + insertFailed;
+  if (rejectTotal > 0) {
+    const breakdown = Object.entries(rejectAudit.counts)
+      .sort((a, b) => b[1] - a[1])
+      .map(([cat, n]) => `${cat}:${n}`)
+      .join(', ');
+    errorParts.push(`reject-breakdown [${breakdown}]`);
+    // eslint-disable-next-line no-console
+    console.log(`[reject-audit] ${JSON.stringify({
+      source: source.name,
+      found: raws.length,
+      already_in_db: duplicates,
+      inserted,
+      rejected: rejectTotal,
+      by_category: rejectAudit.counts,
+      samples: rejectAudit.samples,
+    })}`);
+  }
   await finishLog({
     status,
     articles_found: raws.length,

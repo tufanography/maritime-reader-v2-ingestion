@@ -589,6 +589,25 @@ async function fetchSitemapUrls(sitemapUrl: string, urlPattern: string | undefin
   return entries.map((e) => e.url);
 }
 
+/** Source-level extraction settings a jobs/job_groups source means to apply to
+ *  EVERY job, inherited into each job config unless the job overrides it. Without
+ *  this, a source whose detail pages are JS-rendered (top-level requires_js) or
+ *  that carries a source-level date/content selector would silently lose those
+ *  settings at the per-job recursion — MEASURED 2026-10-01: Bureau Veritas'
+ *  .page-heading--date never reached its job, and London P&I's requires_js:true
+ *  never reached its jobs. A job-specific value always wins. */
+const JOB_INHERITED_KEYS: (keyof HtmlScraperConfig)[] = [
+  'exclude_selector', 'requires_js', 'js_wait_until', 'js_wait_selector',
+  'date_selector', 'date_format', 'content_selector',
+];
+export function inheritJobConfig(parent: HtmlScraperConfig, job: HtmlScraperConfig): HtmlScraperConfig {
+  const jobCfg: HtmlScraperConfig = { ...job };
+  for (const k of JOB_INHERITED_KEYS) {
+    if (parent[k] !== undefined && job[k] === undefined) (jobCfg as any)[k] = parent[k];
+  }
+  return jobCfg;
+}
+
 export async function fetchHtmlSource(args: {
   config: HtmlScraperConfig;
   delayMs: number;
@@ -611,16 +630,24 @@ export async function fetchHtmlSource(args: {
     const all: RawArticle[] = [];
     for (const job of config.jobs) {
       try {
-        // Inherit the parent's exclude_selector into each job unless the job
-        // overrides it. Jobs are otherwise self-contained configs, so a
-        // source-level exclude_selector (the common case — strip the same
-        // byline/nav chrome across every job) would otherwise be silently
-        // dropped at this recursion. (2026-06-30: P&I byline pollution fix —
-        // these sources are all jobs/job_groups based.)
-        const jobCfg =
-          config.exclude_selector !== undefined && job.exclude_selector === undefined
-            ? { ...job, exclude_selector: config.exclude_selector }
-            : job;
+        // Inherit source-level extraction settings into each job unless the job
+        // overrides them. Jobs are otherwise self-contained configs, so a
+        // source-level setting meant for every job would be silently dropped at
+        // this recursion.
+        //   - exclude_selector: strip the same byline/nav chrome across jobs
+        //     (2026-06-30 P&I byline pollution fix).
+        //   - requires_js / js_wait_until / js_wait_selector: a source whose
+        //     DETAIL pages are JS-rendered sets requires_js at the top level, but
+        //     the detail fetch reads it from the (job) config it is handed — so
+        //     without inheritance a jobs/job_groups source renders its DETAIL
+        //     pages with plain fetch. MEASURED 2026-10-01: Bureau Veritas' date
+        //     (.page-heading--date, present only after JS) never resolved, and
+        //     London P&I's top-level requires_js:true never reached its jobs.
+        //   - date_selector / date_format / content_selector: a source-level
+        //     per-page selector must apply to the detail pages of every job too.
+        // Only inherited when the job does NOT define its own value, exactly like
+        // exclude_selector — a job-specific override always wins.
+        const jobCfg = inheritJobConfig(config, job);
         const out = await fetchHtmlSource({ config: jobCfg, delayMs, knownUrls, sourceName });
         all.push(...out);
       } catch (err) {
@@ -961,6 +988,31 @@ export async function fetchHtmlSource(args: {
       // exclude_selector must never accidentally drop the publish date.
       const $body = config.exclude_selector ? cheerio.load($.html()) : $;
       if (config.exclude_selector) $body(config.exclude_selector).remove();
+      // Generic body text (article → main → body), used both as the no-selector
+      // default AND as a graceful fallback when a configured content_selector
+      // matches nothing (see below).
+      const bodyFallback = (): string => {
+        // PRESERVE existing behaviour: first non-null of article → main → body.
+        // This keeps every source that already extracts cleanly untouched.
+        const first = stripHtml($body('article').html() ?? $body('main').html() ?? $body('body').html() ?? '').slice(0, 2000);
+        if (first.trim().length >= 30) return first;
+        // Escalation ONLY when the first container is empty/tiny — e.g. Gard's
+        // near-empty semantic <article> (27 chars, title only) while the real
+        // circular text lives in sibling <div>s under <body>. Pick the RICHEST
+        // of the three rather than the first present one. Never runs for sources
+        // whose first container is already adequate, so no excerpt regression.
+        const richest = (['article', 'main', 'body'] as const)
+          .map((sel) => stripHtml($body(sel).html() ?? '').slice(0, 2000))
+          .reduce((a, b) => (b.trim().length > a.trim().length ? b : a), first);
+        return richest;
+      };
+      // Last-resort excerpt: the page's own meta/OG description.
+      const metaDescription = (): string => (
+        $('meta[property="og:description"]').attr('content') ||
+        $('meta[name="description"]').attr('content') ||
+        $('meta[name="twitter:description"]').attr('content') ||
+        ''
+      ).replace(/\s+/g, ' ').trim().slice(0, 2000);
       if (config.content_selector) {
         const parts = $body(config.content_selector)
           .map((_, el) => $body(el).text())
@@ -968,9 +1020,34 @@ export async function fetchHtmlSource(args: {
           .map((t) => t.replace(/\s+/g, ' ').trim())
           .filter(Boolean);
         excerpt = parts.join(' ').slice(0, 2000);
+        // A configured content_selector that matches nothing previously left
+        // excerpt='' → the article was silently rejected as "insufficient
+        // content" even when body text AND date were both present. This is the
+        // single largest recoverable rejection class MEASURED 2026-09-30:
+        //   NorthStandard content_selector ".rich-text--heading-purple" — class
+        //     the SPA renamed; 4/4 fresh items had excerptLen=0 yet valid dates.
+        //   Gard content_selector "article.css-1c169qs" — a chakra/emotion
+        //     CSS-in-JS hash that ROTATES on every deploy; 34 circulars fell to
+        //     excerpt≈27 (title only) despite correct JSON-LD dates.
+        // Degrade gracefully: generic body text, then meta description. This
+        // never WEAKENS a gate (it only rescues items the gate would drop) and
+        // never fabricates a date — post-repair the item still runs the full
+        // quality + date + dedup pipeline in scrapeSource.
+        if (excerpt.trim().length < 30) {
+          const fb = bodyFallback();
+          if (fb.trim().length >= 30) {
+            excerpt = fb;
+          } else {
+            const md = metaDescription();
+            if (md.length > excerpt.trim().length) excerpt = md;
+          }
+        }
       } else {
-        const bodyHtml = $body('article').html() ?? $body('main').html() ?? $body('body').html() ?? '';
-        excerpt = stripHtml(bodyHtml).slice(0, 2000);
+        excerpt = bodyFallback();
+        if (excerpt.trim().length < 30) {
+          const md = metaDescription();
+          if (md.length > excerpt.trim().length) excerpt = md;
+        }
       }
 
       const image =

@@ -87,6 +87,41 @@ const LOCKED_CONTENT_PATTERNS: RegExp[] = [
   /lost your password\?.{0,60}(register|don'?t have an account)/i,
 ];
 
+// Login-wall / access-denied pages. Some sources (Japan P&I /en/news/<id>)
+// expose article URLs in their sitemap but serve a LOGIN SHELL to anonymous
+// clients — MEASURED 2026-09-30: piclub.or.jp/en/news/22884 returns
+// title "Login - Japan P&I Club", body begins "Login … SEARCH …". Indexing it
+// would store the login chrome as if it were the article. These must be
+// rejected AND never fed into date-repair (a login shell has no real date).
+//
+// CRITICAL false-positive guard: almost every modern site has a "Login" link
+// in its nav/header, so the mere presence of the word "login" in the body is
+// NOT a login wall. We fire only when the TITLE itself is a login/error page,
+// or the body carries an unambiguous login-FORM combination.
+const LOGIN_WALL_TITLE_PATTERNS: RegExp[] = [
+  /^(log\s*in|login|sign\s*in)\b/i,
+  /^(access\s+denied|forbidden|unauthori[sz]ed|permission\s+denied)\b/i,
+  /^(403\b|404\b|error\s*40\d|page\s+not\s+found|not\s+found)\b/i,
+];
+const LOGIN_WALL_BODY_PATTERNS: RegExp[] = [
+  /\bplease\s+(log\s*in|sign\s*in)\s+to\s+(view|access|read|continue|see)\b/i,
+  /\byou\s+(do\s+not|don'?t)\s+have\s+permission\s+to\s+(view|access)\b/i,
+  /\b(enter\s+your\s+)?(username|user\s*id|email)\b.{0,40}\bpassword\b/i,
+];
+
+/** True when a scraped page is a login / access-denied shell rather than the
+ *  article it was supposed to be. Exported so both the quality gate and any
+ *  repair path can agree on the same definition (a login wall must never be
+ *  date-repaired into the DB). Conservative by design — see the comment on
+ *  LOGIN_WALL_TITLE_PATTERNS about the nav-"Login"-link false positive. */
+export function looksLikeLoginWall(args: { title: string; excerpt: string }): boolean {
+  const title = args.title.trim();
+  const excerpt = args.excerpt.trim();
+  for (const pat of LOGIN_WALL_TITLE_PATTERNS) if (pat.test(title)) return true;
+  for (const pat of LOGIN_WALL_BODY_PATTERNS) if (pat.test(excerpt)) return true;
+  return false;
+}
+
 /** Count how many CTA-style fragments appear in the excerpt. */
 function ctaDensity(excerpt: string): number {
   const ctas = [
@@ -112,6 +147,12 @@ export type QualityVerdict =
 export function looksLikeArticle(args: { title: string; excerpt: string; url?: string }): QualityVerdict {
   const title = args.title.trim();
   const excerpt = args.excerpt.trim();
+
+  // Login wall / access-denied shell — classify with a DISTINCT reason before
+  // the generic title/excerpt checks so audits can separate "members-only
+  // source" from "genuine junk title". (Ordering also guarantees these never
+  // reach the date gate, so a login shell is never date-repaired.)
+  if (looksLikeLoginWall({ title, excerpt })) return { ok: false, reason: 'login_wall' };
 
   if (title.length < 8) return { ok: false, reason: `title too short (${title.length} chars)` };
   for (const pat of JUNK_TITLE_PATTERNS) {

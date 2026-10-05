@@ -86,6 +86,11 @@ export async function runAudit(topNames: string[]) {
     // rejecting (Gard/Steamship/Japan), not just caught up.
     const rejRuns = logs.filter((l: any) => /reject/i.test(l.error_message || '')).length;
     const chronicReject = foundSum >= 20 && newSum <= 2 && rejRuns >= 3;
+    // Machine-readable per-category breakdown the scraper wrote into the newest
+    // log's error_message ("reject-breakdown [missing_date:9, login_wall:2]").
+    // Surfaced in the chronic section so the audit says WHY, not just "captures none".
+    const rejBreakdown = (logs.find((l: any) => /reject-breakdown/.test(l.error_message || ''))?.error_message || '')
+      .match(/reject-breakdown \[([^\]]*)\]/)?.[1] || null;
     const med = median(founds);
     const latest2 = founds.slice(0, 2);
     const newestRow = await jget(`articles?select=created_at&source_id=eq.${src.id}&order=created_at.desc&limit=1`);
@@ -183,7 +188,7 @@ export async function runAudit(topNames: string[]) {
     const lagNote = (feedLagH != null && feedLagH > FEED_LAG_HOURS)
       ? `our newest article is ${Math.round(feedLagH)}h behind ${name}'s LIVE feed — the scraper looks healthy (found ${med}/run) but is serving stale content`
       : undefined;
-    report.push({ name, type: src.type, foundMedian: med, latestFound: latest2, foundSum, newSum, zeroStreak, peakFound: src.peak_found === true, daysSinceCapture, extracted: extractedTotal, uncaptured: uncaptured.length, feedLagH: feedLagH == null ? null : Math.round(feedLagH), note: lagNote, flags, sample: uncaptured.slice(0, 4), covErr });
+    report.push({ name, type: src.type, foundMedian: med, latestFound: latest2, foundSum, newSum, zeroStreak, peakFound: src.peak_found === true, daysSinceCapture, extracted: extractedTotal, uncaptured: uncaptured.length, feedLagH: feedLagH == null ? null : Math.round(feedLagH), note: lagNote, flags, sample: uncaptured.slice(0, 4), covErr, rejBreakdown });
     if (flags.length) console.log(`  ${name.padEnd(26)} found(med ${med}, Σ${foundSum}/new Σ${newSum}) lastCap ${daysSinceCapture}d${feedLagH != null ? ' feedLag ' + feedLagH.toFixed(0) + 'h' : ''} | not-in-DB ${covErr ? 'ERR' : uncaptured.length} ⚠ ${flags.join(',')}`);
   }
   return report;
@@ -242,6 +247,12 @@ async function checkSiteFreshness(): Promise<{ name: string; flags: string[]; no
 // FYI so it never emails a false "broken" alarm.
 const CRITICAL = new Set(['SILENT', 'ERROR_STREAK', 'FOUND_COLLAPSE', 'FEED_LAG', 'MISSING_SOURCE', 'FEED_STALE', 'BASE_STALE']);
 
+// A source that breaks and STAYS broken must not fall silent after its first
+// alert. Re-remind at most once every REMINDER_DAYS so a persistent outage keeps
+// nudging without flooding. MEASURED failure this guards against: 11 sources
+// critical, issue updated daily for weeks, zero reminders ever sent.
+const REMINDER_DAYS = 7;
+
 function buildBody(report: any[]): string {
   const crit = report.filter((r) => (r.flags || []).some((f: string) => CRITICAL.has(f)));
   const chronic = report.filter((r) => (r.flags || []).includes('CHRONIC_REJECTION') && !crit.includes(r));
@@ -252,7 +263,19 @@ function buildBody(report: any[]): string {
   for (const r of crit) b += `- **${r.name}** [${r.flags.join(', ')}] — ${r.note ?? `found median ${r.foundMedian}, last ${JSON.stringify(r.latestFound)}, nothing captured in ${r.daysSinceCapture} day(s)`}\n`;
   b += `\n## 🔁 Chronic rejection — finds content but captures ~none (${chronic.length})\n`;
   if (!chronic.length) b += `_none_\n`;
-  for (const r of chronic) b += `- **${r.name}** — found Σ${r.foundSum} / new Σ${r.newSum} over last 20 runs (dateless circulars, login wall, or quality reject)\n`;
+  // Historical vs current, spelled out: `foundSum/newSum` are 20-RUN CUMULATIVE
+  // totals — they re-count already-known URLs every run (stop_on_known re-lists),
+  // so "found 401" does NOT mean 401 candidates in one run. The latest run's own
+  // found count and per-category rejections are shown separately so the two can
+  // never be confused (the previous single-number wording was misleading).
+  for (const r of chronic) {
+    const latest = Array.isArray(r.latestFound) ? r.latestFound[0] : undefined;
+    b += `- **${r.name}**\n`;
+    b += `    - Historical (last 20 runs, cumulative): found ${r.foundSum}, new ${r.newSum} — cumulative totals, NOT one-run candidates\n`;
+    b += `    - Latest run: found ${latest ?? 'n/a'} candidate(s)`;
+    b += r.rejBreakdown ? `, rejections by category: ${r.rejBreakdown}\n` : ` (dateless circulars, login wall, or quality reject)\n`;
+    for (const s of (r.sample || []).slice(0, 3)) b += `      - sample not-in-DB: ${s.title} — ${s.url}\n`;
+  }
   b += `\n## 📉 Coverage gaps — extracted but not in our DB (${gaps.length})\n`;
   if (!gaps.length) b += `_none_\n`;
   for (const r of gaps) {
@@ -299,16 +322,30 @@ const critLi = (r: any) =>
 
 // `newly` is what changed since the last audit and leads the mail; `persisting` is
 // the standing baseline, listed after so the new break is never buried in it.
-function critHtml(newly: any[], persisting: any[] = []): string {
+function critHtml(newly: any[], persisting: any[] = [], recovered: string[] = []): string {
   const UL = 'style="font-family:ui-monospace,monospace;font-size:13px"';
   return `<p><strong>Maritime Reader — coverage audit</strong></p>` +
     `<p>${newly.length} source(s) newly broken since the last audit:</p>` +
     `<ul ${UL}>` + newly.map(critLi).join('') + `</ul>` +
+    (recovered.length ? `<p style="color:#2a7">Recovered since last audit: ${recovered.join(', ')}</p>` : '') +
     (persisting.length
       ? `<p style="color:#666">Still broken from before (${persisting.length}, already reported):</p>` +
         `<ul ${UL} >` + persisting.map(critLi).join('') + `</ul>`
       : '') +
     `<p style="color:#666;font-size:12px">Full detail (chronic rejections + coverage gaps) is in the GitHub coverage-audit issue. ${new Date().toISOString()}</p>`;
+}
+
+// Chronic-rejection ping: a source that keeps FINDING content but inserts almost
+// none (foundSum≥20, newSum≤2, ≥3 runs logging rejections). Distinct from a
+// broken/silent source — the fetch works, the gate or a stale selector is eating
+// everything — so it gets its own amber alert, fired only when a source NEWLY
+// enters this state (set-diff, like critical).
+function chronicHtml(newly: any[]): string {
+  const UL = 'style="font-family:ui-monospace,monospace;font-size:13px"';
+  return `<p><strong>Maritime Reader — chronic rejection</strong></p>` +
+    `<p>${newly.length} source(s) now find content but capture almost none of it:</p>` +
+    `<ul ${UL}>` + newly.map((r) => `<li><strong>${r.name}</strong> — found Σ${r.foundSum} / new Σ${r.newSum} over recent runs. Likely a stale selector, dateless items, or a login wall — see the coverage-audit issue for the per-category breakdown.</li>`).join('') + `</ul>` +
+    `<p style="color:#666;font-size:12px">${new Date().toISOString()}</p>`;
 }
 
 async function postIssue(report: any[]) {
@@ -335,6 +372,20 @@ async function postIssue(report: any[]) {
   const persisting = critRows.filter((r) => priorSet.has(r.name));
   const recovered = [...priorSet].filter((n) => !critRows.some((r) => r.name === n));
 
+  // Chronic-rejection set — persisted like crit-sources so only a NEW entrant
+  // emails; the standing chronic baseline stays in the issue, not the inbox.
+  const chronicRows = report.filter((r) => (r.flags || []).includes('CHRONIC_REJECTION'));
+  const chronicMatch = (open?.body || '').match(/<!-- chronic-sources:(\[.*?\]) -->/);
+  let priorChronic: string[] = [];
+  if (chronicMatch) { try { priorChronic = JSON.parse(chronicMatch[1]); } catch { priorChronic = []; } }
+  const priorChronicSet = new Set(priorChronic);
+  const newlyChronic = chronicRows.filter((r) => !priorChronicSet.has(r.name));
+
+  // 7-day reminder clock for STILL-broken sources (read last stamp from prior body).
+  const remMatch = (open?.body || '').match(/<!-- crit-reminder:(\S+?) -->/);
+  const lastReminder = remMatch ? Date.parse(remMatch[1]) : 0;
+  const reminderDue = persisting.length > 0 && (Date.now() - lastReminder) >= REMINDER_DAYS * 86_400_000;
+
   if (!flagged.length) {
     if (open) {
       await gh(`issues/${open.number}`, { method: 'PATCH', body: JSON.stringify({ state: 'closed' }) });
@@ -346,26 +397,46 @@ async function postIssue(report: any[]) {
     return;
   }
   const title = `🔎 Coverage audit — ${critCount} broken, ${flagged.length - critCount} coverage gap(s)`;
-  const body = buildBody(report);
-  if (open) { await gh(`issues/${open.number}`, { method: 'PATCH', body: JSON.stringify({ title, body, state: 'open' }) }); console.log(`updated audit issue #${open.number}`); }
-  else { const r = await (await gh(`issues`, { method: 'POST', body: JSON.stringify({ title, body, labels: ['coverage-audit'] }) })).json(); console.log(`opened audit issue #${r.number}`); }
 
   // Delta email — fires on what CHANGED, not on how many are broken:
-  //   newly entered → ping, listing the new breaks first and the standing ones after.
-  //   all cleared   → ping "cleared".
-  // A source that was already critical yesterday sends nothing today, so the standing
-  // baseline (dark P&I clubs, chronic rejections) stays in the issue and out of the
-  // inbox — while a source that breaks TODAY is reported the same day.
+  //   newly broken   → red ping (new breaks first, standing ones after, recoveries noted)
+  //   newly chronic  → amber ping (finds content, captures ~none)
+  //   still broken   → 7-day reminder so a persistent outage never goes fully silent
+  //   all cleared    → green ping
+  // A source already critical yesterday sends nothing today (baseline stays in the
+  // issue, out of the inbox) UNLESS the 7-day reminder is due. `resetReminder`
+  // records whether this run re-based the reminder clock.
+  let resetReminder = false;
   if (newlyBroken.length) {
     const subj = newlyBroken.length === 1
       ? `🔴 Maritime Reader: ${newlyBroken[0].name} just broke`
       : `🔴 Maritime Reader: ${newlyBroken.length} sources just broke`;
-    await sendEmail(subj, critHtml(newlyBroken, persisting));
+    await sendEmail(subj, critHtml(newlyBroken, persisting, recovered));
+    resetReminder = true;
+  } else if (newlyChronic.length) {
+    const subj = newlyChronic.length === 1
+      ? `🟠 Maritime Reader: ${newlyChronic[0].name} now rejecting almost everything it finds`
+      : `🟠 Maritime Reader: ${newlyChronic.length} sources now rejecting almost everything they find`;
+    await sendEmail(subj, chronicHtml(newlyChronic));
+  } else if (reminderDue) {
+    await sendEmail(
+      `🔴 Maritime Reader: ${persisting.length} source(s) still broken (${REMINDER_DAYS}-day reminder)`,
+      critHtml([], persisting, recovered));
+    resetReminder = true;
   } else if (critCount === 0 && priorCrit > 0) {
     await sendEmail('✅ Maritime Reader: critical coverage issues cleared',
       `<p>The critical source/site issues have cleared (coverage gaps may remain — tracked in the GitHub issue).</p>` +
       (recovered.length ? `<p>Recovered: ${recovered.join(', ')}</p>` : ''));
   }
+
+  // Persist alerting state in the issue body (no DB needed): the chronic set for
+  // next run's set-diff, and the reminder clock (rebased to now iff a critical/
+  // reminder email went out, else carried forward).
+  const reminderStamp = resetReminder ? new Date().toISOString() : (remMatch ? remMatch[1] : new Date().toISOString());
+  const stateMarkers = `<!-- chronic-sources:${JSON.stringify(chronicRows.map((r) => r.name).sort())} --><!-- crit-reminder:${reminderStamp} -->`;
+  const body = buildBody(report) + stateMarkers;
+  if (open) { await gh(`issues/${open.number}`, { method: 'PATCH', body: JSON.stringify({ title, body, state: 'open' }) }); console.log(`updated audit issue #${open.number}`); }
+  else { const r = await (await gh(`issues`, { method: 'POST', body: JSON.stringify({ title, body, labels: ['coverage-audit'] }) })).json(); console.log(`opened audit issue #${r.number}`); }
 }
 
 if (process.argv[1] && process.argv[1].includes('audit-coverage')) {
