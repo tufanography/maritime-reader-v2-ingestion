@@ -13,6 +13,7 @@
 //
 // Read-only. Run: npx tsx scripts/audit-coverage.ts [--only=Gard,Splash247]
 import 'dotenv/config';
+import { readFileSync } from 'node:fs';
 import { fetchRaw } from '../lib/scrapers/orchestrator';
 import { hashUrl } from '../lib/scrapers/util';
 import type { Source } from '../lib/supabase/types';
@@ -239,13 +240,51 @@ async function checkSiteFreshness(): Promise<{ name: string; flags: string[]; no
   return { name: 'SITE FRESHNESS', flags, note: notes.join(' · ') };
 }
 
+// Date-integrity result, folded into THIS audit's EXISTING issue+email so a
+// mis-dated-article finding becomes a visible alarm with NO second alarm system.
+// The check itself (scripts/audit-date-integrity.ts) is UNCHANGED and runs as the
+// prior workflow step; here we only read its captured stdout + REAL exit code.
+// THREE states, never two — a check that could not run must NOT read as clean:
+//   exit 0 + count 0            → CLEAN   (no flag; row stays out of the issue)
+//   exit 2 + count > 0          → ALARM   (DATE_INTEGRITY, critical)
+//   anything else / unreadable  → UNKNOWN (DATE_INTEGRITY_UNKNOWN, critical):
+//     missing files, a non-0/2 exit (runtime/DB failure), an unparseable or
+//     self-contradictory (exit vs count) output. UNKNOWN is critical ON PURPOSE —
+//     it keeps any existing date alarm OPEN (never silently closes it via a false
+//     "recovered") and makes the broken check itself visible. Pure (no network),
+//     so it is unit-tested with fixture files.
+export function readDateIntegrity(
+  outPath = 'date-integrity.out',
+  exitPath = 'date-integrity.exit',
+): { name: string; flags: string[]; note: string } {
+  const name = 'DATE INTEGRITY';
+  let out: string | null = null;
+  let exit: number | null = null;
+  try { out = readFileSync(outPath, 'utf8'); } catch { /* missing → UNKNOWN */ }
+  try { const raw = readFileSync(exitPath, 'utf8').trim(); exit = /^\d+$/.test(raw) ? Number(raw) : null; } catch { /* missing → UNKNOWN */ }
+  const m = out?.match(/scraper_default, \|pub-created\|<\d+s\): (\d+)/);
+  const n = m ? Number(m[1]) : null;
+  if (exit === 0 && n === 0) {
+    return { name, flags: [], note: 'date-integrity OK — 0 scrape-time-dated visible articles' };
+  }
+  if (exit === 2 && n !== null && n > 0) {
+    const by = out!.match(/by source:\n([\s\S]*?)(?:\nsamples:|\n*$)/)?.[1]?.replace(/\s+/g, ' ').trim() ?? '';
+    return { name, flags: ['DATE_INTEGRITY'], note: `${n} visible article(s) dated at scrape-time (scraper_default='now()' fallback — old items surface as fresh).${by ? ' by source: ' + by : ''}` };
+  }
+  return { name, flags: ['DATE_INTEGRITY_UNKNOWN'], note: `⚠ date-integrity check did NOT complete cleanly (exit=${exit ?? 'missing'}, count=${n ?? 'unparsed'}) — result UNKNOWN; NOT treated as clean, any existing date alarm stays open` };
+}
+
 // CRITICAL = a source broke / site is stale (emails on it); the rest are coverage FYIs.
 // EXTRACT_ERROR is NOT critical: it means the AUDIT's own fetchRaw threw (often a
 // requires_js/CF render hiccup) while the source itself may be capturing fine
 // (NorthStandard 2026-06-26: EXTRACT_ERROR but 28 articles captured that day). Real
 // outages are caught by SILENT/ERROR_STREAK/FOUND_COLLAPSE; EXTRACT_ERROR stays a
 // FYI so it never emails a false "broken" alarm.
-const CRITICAL = new Set(['SILENT', 'ERROR_STREAK', 'FOUND_COLLAPSE', 'FEED_LAG', 'MISSING_SOURCE', 'FEED_STALE', 'BASE_STALE']);
+// DATE_INTEGRITY (mis-dated rows found) and DATE_INTEGRITY_UNKNOWN (the date check
+// could not be verified) are BOTH critical and BOTH carry the row name 'DATE
+// INTEGRITY', so an error→unknown transition keeps the SAME alarm open (no re-email,
+// no false close) and only a clean exit-0/count-0 run drops it from the set → closes.
+export const CRITICAL = new Set(['SILENT', 'ERROR_STREAK', 'FOUND_COLLAPSE', 'FEED_LAG', 'MISSING_SOURCE', 'FEED_STALE', 'BASE_STALE', 'DATE_INTEGRITY', 'DATE_INTEGRITY_UNKNOWN']);
 
 // A source that breaks and STAYS broken must not fall silent after its first
 // alert. Re-remind at most once every REMINDER_DAYS so a persistent outage keeps
@@ -253,7 +292,7 @@ const CRITICAL = new Set(['SILENT', 'ERROR_STREAK', 'FOUND_COLLAPSE', 'FEED_LAG'
 // critical, issue updated daily for weeks, zero reminders ever sent.
 const REMINDER_DAYS = 7;
 
-function buildBody(report: any[]): string {
+export function buildBody(report: any[]): string {
   const crit = report.filter((r) => (r.flags || []).some((f: string) => CRITICAL.has(f)));
   const chronic = report.filter((r) => (r.flags || []).includes('CHRONIC_REJECTION') && !crit.includes(r));
   const gaps = report.filter((r) => (r.flags || []).includes('UNCAPTURED_ITEMS') && !crit.includes(r) && !chronic.includes(r));
@@ -443,6 +482,7 @@ if (process.argv[1] && process.argv[1].includes('audit-coverage')) {
   (async () => {
     const report = await runAudit(ONLY || AUDIT_SOURCES);
     report.unshift(await checkSiteFreshness());   // site-level FEED_STALE / BASE_STALE (gap #2)
+    report.unshift(readDateIntegrity());          // date-integrity → DATE_INTEGRITY / _UNKNOWN (prior workflow step's captured result)
     const flagged = report.filter((r) => r.flags && r.flags.length);
     console.log(`\n=== AUDIT SUMMARY: ${flagged.length} flagged ===`);
     for (const r of flagged) {

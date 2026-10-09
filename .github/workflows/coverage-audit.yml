@@ -30,12 +30,22 @@ jobs:
       - run: npm ci
       - name: Run date-integrity guard
         # Cheap daily check (no network): flags VISIBLE articles dated at scrape
-        # time via the scraper_default fallback — the "old circular shows as
-        # today" signature. continue-on-error so a hit is surfaced (exit 2) in
-        # the run without blocking the coverage audit below. Deep verify+fix
-        # (VERIFY=1 FIX=1, Playwright) is run from the scrape workflow / on demand.
+        # time via the scraper_default fallback — the "old circular shows as today"
+        # signature. The script is UNCHANGED (exit 0 = clean, 2 = mis-dated rows
+        # found, other = run failure). Capture its stdout AND its REAL exit code to
+        # files so the coverage-audit step below can fold the result into the ONE
+        # issue/email as a DATE_INTEGRITY (found) / DATE_INTEGRITY_UNKNOWN (check
+        # failed — never read as clean) row. `set +e` keeps the real exit code
+        # (a pipe like `| tee` would mask it); continue-on-error is a backstop so a
+        # capture glitch still can't skip the coverage audit. Deep verify+fix
+        # (VERIFY=1 FIX=1, Playwright) is still run from the scrape workflow / on demand.
         continue-on-error: true
-        run: npx tsx scripts/audit-date-integrity.ts
+        run: |
+          set +e
+          npx tsx scripts/audit-date-integrity.ts > date-integrity.out 2>&1
+          echo "$?" > date-integrity.exit
+          set -e
+          cat date-integrity.out
         env:
           NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
