@@ -7,7 +7,7 @@
 import * as cheerio from 'cheerio';
 import { looksLikeArticle, looksLikeLoginWall } from '../quality';
 import { classifyRejectReason } from '../orchestrator';
-import { resolveArticleDate, inheritJobConfig } from '../html';
+import { resolveArticleDate, inheritJobConfig, parseListDate, applyListDate } from '../html';
 
 let pass = 0;
 const failures: string[] = [];
@@ -103,6 +103,30 @@ check('parent list_url does NOT leak into job',
   inheritJobConfig({ list_url: 'parent-url', requires_js: true } as any, { item_selector: 'a' } as any).list_url, undefined);
 check('job keeps its own item_selector',
   inheritJobConfig({ requires_js: true } as any, { item_selector: 'a.card' } as any).item_selector, 'a.card');
+
+// ---------------------------------------------------------------------------
+// 5. parseListDate — the date printed on a listing card (China P&I: day + YYYY-MM)
+// ---------------------------------------------------------------------------
+const NOW = new Date('2026-10-10T00:00:00Z');
+check('day + YYYY-MM boxes', parseListDate('23 2026-07', NOW), '2026-07-23T00:00:00.000Z');
+check('raw cheerio text with newlines', parseListDate('\n 13\n 2026-07 \n', NOW), '2026-07-13T00:00:00.000Z');
+check('plain ISO date', parseListDate('2026-07-23', NOW), '2026-07-23T00:00:00.000Z');
+check('written date falls back to extractFirstDate', parseListDate('23 July 2026', NOW)?.slice(0, 10), '2026-07-23');
+check('impossible calendar date → null (no guess)', parseListDate('31 2026-02', NOW), null);
+check('future date → null', parseListDate('23 2099-07', NOW), null);
+check('empty → null', parseListDate('', NOW), null);
+check('non-date text → null', parseListDate('Attachments:', NOW), null);
+
+// applyListDate — opt-in gate, list date wins, missing list date is never "verified"
+const art = (d: string | null, s: string | null, c: string | null) => ({ published_at: d, published_at_source: s, published_at_confidence: c }) as any;
+const a1 = art('2026-07-14T00:00:00.000Z', 'original', 'medium');
+check('source not opted in → untouched', [applyListDate(a1, '2026-07-23T00:00:00.000Z', false), a1], ['none', art('2026-07-14T00:00:00.000Z', 'original', 'medium')]);
+const a2 = art('2026-07-14T00:00:00.000Z', 'original', 'medium');
+check('list date replaces detail guess', [applyListDate(a2, '2026-07-23T00:00:00.000Z', true), a2], ['list', art('2026-07-23T00:00:00.000Z', 'original', 'high')]);
+const a3 = art('2026-07-14T00:00:00.000Z', 'original', 'high');
+check('opted in, no list date → detail date kept but downgraded', [applyListDate(a3, undefined, true), a3], ['unverified', art('2026-07-14T00:00:00.000Z', 'scraper_default', 'low')]);
+const a4 = art(null, null, null);
+check('opted in, no date anywhere → stays null, flagged unverified', [applyListDate(a4, undefined, true), a4], ['unverified', art(null, null, null)]);
 
 console.log(`${pass} test gecti, ${failures.length} basarisiz`);
 if (failures.length) { console.log('\nBASARISIZ:\n' + failures.join('\n\n')); process.exit(1); }

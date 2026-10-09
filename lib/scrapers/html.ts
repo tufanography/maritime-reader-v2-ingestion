@@ -509,7 +509,60 @@ function absUrl(href: string, base: string): string {
   }
 }
 
-type LinkItem = { url: string; linkText: string };
+type LinkItem = { url: string; linkText: string; listDate?: string };
+
+/** Decide an article's date when the source declares a listing-card date
+ *  (list_date_selector on the normal detail-fetch path). Mutates `article`.
+ *    'none'       — source did not opt in: article untouched (every other source).
+ *    'list'       — card date read: it REPLACES the detail-page guess, original/high.
+ *    'unverified' — source opted in but this card had no readable date: the
+ *                   detail-page date (if any) is kept only as a fallback and is
+ *                   DOWNGRADED to scraper_default/low, the existing "not a verified
+ *                   publish date" marker — so it is never presented as verified
+ *                   (the site keeps scraper_default out of the freshness feed). */
+export function applyListDate(
+  article: Pick<RawArticle, 'published_at' | 'published_at_source' | 'published_at_confidence'>,
+  listDate: string | undefined,
+  optedIn: boolean,
+): 'none' | 'list' | 'unverified' {
+  if (!optedIn) return 'none';
+  if (listDate) {
+    article.published_at = listDate;
+    article.published_at_source = 'original';
+    article.published_at_confidence = 'high';
+    return 'list';
+  }
+  if (article.published_at) {
+    article.published_at_source = 'scraper_default';
+    article.published_at_confidence = 'low';
+  }
+  return 'unverified';
+}
+
+/** Parse the date a LISTING card shows next to an article link. Some sites print
+ *  the publication date only on the index (China P&I: day and "YYYY-MM" in two
+ *  separate boxes → "23 2026-07"), while the detail page carries no date field —
+ *  so the detail cascade picks a date MENTIONED in the body and stores it as if
+ *  it were the publish date. MEASURED 2026-10-10: 148 of 149 "original" China P&I
+ *  bulletin dates disagreed with the listing (median 59 days off). Returns a UTC
+ *  midnight ISO string, or null for anything it cannot read as a real, non-future
+ *  calendar date — never a guess. */
+export function parseListDate(text: string, now: Date = new Date()): string | null {
+  const t = (text || '').replace(/\s+/g, ' ').trim();
+  if (!t) return null;
+  const m = t.match(/^(\d{1,2}) (\d{4})-(\d{2})$/) ?? null;
+  const m2 = m ? null : t.match(/^(\d{4})-(\d{2})(?:-| )(\d{1,2})$/);
+  let y: number, mo: number, d: number;
+  if (m) { d = +m[1]; y = +m[2]; mo = +m[3]; }
+  else if (m2) { y = +m2[1]; mo = +m2[2]; d = +m2[3]; }
+  else {
+    const iso = extractFirstDate(t);
+    return iso && Date.parse(iso) <= now.getTime() ? iso : null;
+  }
+  const dt = new Date(Date.UTC(y, mo - 1, d));
+  if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== mo - 1 || dt.getUTCDate() !== d) return null;
+  return dt.getTime() <= now.getTime() ? dt.toISOString() : null;
+}
 
 /** Pull <loc> URLs out of an XML sitemap. Returns the most recently
  *  modified entries first (by <lastmod> when present, else original
@@ -806,7 +859,11 @@ export async function fetchHtmlSource(args: {
         seen.add(abs);
         // Capture the link's anchor text as fallback title (used for PDFs that lack a Title tag).
         const linkText = ($el.text() || $el.attr('title') || '').replace(/\s+/g, ' ').trim();
-        items.push({ url: abs, linkText });
+        // Opt-in: the date printed on this link's listing card (see parseListDate).
+        const listDate = config.list_date_selector
+          ? parseListDate($el.closest(config.list_card_selector ?? 'article').find(config.list_date_selector).first().text()) ?? undefined
+          : undefined;
+        items.push({ url: abs, linkText, listDate });
         // Adaptive cutoff bookkeeping.
         if (knownUrls && stopOnKnown > 0) {
           if (knownUrls.has(hashUrl(abs))) consecutiveKnown++;
@@ -1104,7 +1161,7 @@ export async function fetchHtmlSource(args: {
     }
   }
 
-  for (const { url: link, linkText } of targets) {
+  for (const { url: link, linkText, listDate } of targets) {
     let detail: FetchedDetail;
     try {
       detail = await fetchDetail(link, linkText, true);
@@ -1115,6 +1172,9 @@ export async function fetchHtmlSource(args: {
     if (!detail) continue;
 
     if (detail.kind === 'article') {
+      if (applyListDate(detail.article, listDate, !!config.list_date_selector) === 'unverified') {
+        console.warn(`[list-date] UNVERIFIED date for ${link}: listing card had no readable date, kept the detail-page guess (${detail.article.published_at}) marked scraper_default/low`);
+      }
       out.push(detail.article);
       visited.add(link);
       continue;
