@@ -39,7 +39,13 @@ const CTA_TITLE_PATTERNS: RegExp[] = [
   /^(flag\s+(and|&)\s+port\s+state\s+info)$/i,
   /^[A-Z][a-zA-Z]*[™®]/,            // "ABS MyFreedom™", "Foo®" — branded products
   /\b(portal|client\s+portal|my\s*\w+\s+portal)\s*$/i,
-  /^(buy|purchase|order|pricing|plans?)\b/i,
+  // Commercial LABELS only ("Pricing", "Plans", "Buy now", "Order online"): the
+  // word must stand alone as the first word and the whole title be <= 3 words.
+  // The earlier `^(buy|…)\b` also rejected real headlines that merely START with
+  // one of these words — MEASURED 2026-10-11: Skuld's war-risks circular "Buy-back
+  // cover available in respect of certain war risks", and news such as "Plans made
+  // to save Houthi-struck bulker from sinking".
+  /^(buy|purchase|order|pricing|plans?)(?=\s|$)(\s+\S+){0,2}\s*$/i,
   /^(membership|enroll|register\s+today)\b/i,
   // Template / placeholder titles that the scraper picked up from CTA
   // buttons or layout elements rather than real article headlines.
@@ -60,7 +66,12 @@ const JUNK_URL_PATTERNS: RegExp[] = [
   /\/(my-?freedom|client-?portal|portal\/?$|dashboard\/?$)/i,
   /\/(login|signin|sign-in|signup|sign-up|register|enroll)/i,
   /\/(software|engineering-software|engineering-applications)/i,
-  /\/(pricing|plans|buy|purchase|order|cart|checkout)/i,
+  // Whole path SEGMENT only (/buy, /pricing/, /checkout?x). Matching a prefix also
+  // hit article slugs: ".../circulars/2024/buy-back-cover-available-…" was rejected
+  // by this rule even after its title passed (MEASURED 2026-10-11, Skuld).
+  /\/(pricing|plans|buy|purchase|order|cart|checkout)(\/|\?|#|$)/i,
+  // Taxonomy index pages (World Shipping Council /news/category/IWT, …).
+  /\/category\//i,
   /\/(my-account|profile|settings)/i,
 ];
 
@@ -143,10 +154,26 @@ export type QualityVerdict =
   | { ok: true }
   | { ok: false; reason: string };
 
-/** Decide whether a scraped row looks like a real article worth indexing. */
-export function looksLikeArticle(args: { title: string; excerpt: string; url?: string }): QualityVerdict {
+// One-word site-section labels. These became reachable when the minimum title
+// length dropped from 8 to 4 (below), so they are named explicitly: a page whose
+// whole title is "News" / "Topics" / "Safety" is an index, never an article.
+// Deliberately NOT here: subject words that are real one-word publication titles
+// ("Piracy", "Liens" — both rejected by the old 8-char floor, MEASURED 2026-10-11).
+const SECTION_LABEL = /^(news|topics?|safety|about|contact|search|menu|resources|insights|updates|alerts|notices|reports|guides|videos|podcasts|webinars|rules|services|products|members?|library|media|press|help|archive|careers?)$/i;
+
+const normUrl = (u: string) => u.split('#')[0].split('?')[0].replace(/\/+$/, '').toLowerCase();
+
+/** Decide whether a scraped row looks like a real article worth indexing.
+ *  `listUrls` (optional) = the source's own listing-page URLs; a candidate whose
+ *  URL is one of them is the index itself (Skuld "TOPICS" = /topics/). */
+export function looksLikeArticle(args: { title: string; excerpt: string; url?: string; listUrls?: Iterable<string> }): QualityVerdict {
   const title = args.title.trim();
   const excerpt = args.excerpt.trim();
+
+  if (args.url && args.listUrls) {
+    const me = normUrl(args.url);
+    for (const l of args.listUrls) if (normUrl(l) === me) return { ok: false, reason: 'url is a listing page of this source' };
+  }
 
   // Login wall / access-denied shell — classify with a DISTINCT reason before
   // the generic title/excerpt checks so audits can separate "members-only
@@ -154,7 +181,13 @@ export function looksLikeArticle(args: { title: string; excerpt: string; url?: s
   // reach the date gate, so a login shell is never date-repaired.)
   if (looksLikeLoginWall({ title, excerpt })) return { ok: false, reason: 'login_wall' };
 
-  if (title.length < 8) return { ok: false, reason: `title too short (${title.length} chars)` };
+  // Floor is 4 characters, and a title shorter than 8 must also carry >= 4 Latin
+  // letters. 8 rejected real one-word publications ("Liens", "Piracy"); the letter
+  // requirement keeps out numeric/CJK stubs such as "2025年规则" (9 Shipowners' Club
+  // Chinese rule-book pages would otherwise have flipped to accepted).
+  const latin = (title.match(/[A-Za-z]/g) ?? []).length;
+  if (title.length < 4 || (title.length < 8 && latin < 4)) return { ok: false, reason: `title too short (${title.length} chars)` };
+  if (SECTION_LABEL.test(title)) return { ok: false, reason: `title matches junk pattern ${SECTION_LABEL}` };
   for (const pat of JUNK_TITLE_PATTERNS) {
     if (pat.test(title)) return { ok: false, reason: `title matches junk pattern ${pat}` };
   }

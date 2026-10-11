@@ -5,7 +5,7 @@ import { summarizeAndCategorize } from '../ai/claude';
 import { categorizeByRules, extractSummary } from '../ai/rules';
 import type { Source, Category } from '../supabase/types';
 import { fetchRss, fetchWpRest, type RawArticle } from './rss';
-import { fetchHtmlSource, FetchError, type HtmlScraperConfig } from './html';
+import { fetchHtmlSource, FetchError, newListingTally, type HtmlScraperConfig, type ListingTally } from './html';
 import { formatFetchError, parseStatusFromError } from './fetch-health';
 import { hashUrl, sleep } from './util';
 import { looksLikeArticle } from './quality';
@@ -72,7 +72,7 @@ function selectActiveConfig(source: Source): HtmlScraperConfig {
 // EXACT production extraction (rss / html / sitemap / job_groups / requires_js)
 // rather than re-implementing it — a re-implementation diverged and false-flagged
 // healthy sitemap/RSS sources (Gard) as broken. Read-only; no insert side effects.
-export async function fetchRaw(source: Source): Promise<RawArticle[]> {
+export async function fetchRaw(source: Source, tally?: ListingTally): Promise<RawArticle[]> {
   const rawCfg = (source.scraper_config ?? {}) as HtmlScraperConfig & { skip_og_image?: boolean; wp_rest_url?: string; wp_rest_urls?: string[]; wp_rest_per_page?: number };
   const all: RawArticle[] = [];
 
@@ -138,7 +138,9 @@ export async function fetchRaw(source: Source): Promise<RawArticle[]> {
         if (page.length < 1000) break;
       }
       if (hasJob) {
-        all.push(...await fetchHtmlSource({ config, delayMs: source.request_delay_ms, knownUrls, sourceName: source.name }));
+        const listed = await fetchHtmlSource({ config, delayMs: source.request_delay_ms, knownUrls, sourceName: source.name, tally });
+        if (tally) tally.fetched += listed.length;
+        all.push(...listed);
       }
       // Supplemental RSS/Atom feeds — e.g. a publisher's YouTube channel alongside its
       // website news. Each feed is independent; one failure doesn't kill the html job.
@@ -216,6 +218,7 @@ export async function fetchKnownHashes(
  *  can never drift into two different vocabularies. */
 export function classifyRejectReason(reason: string): string {
   if (reason === 'login_wall') return 'login_wall';
+  if (/^url is a listing page/.test(reason)) return 'non_article_page';
   if (/^url matches junk path/.test(reason)) return 'non_article_page';
   if (/CTA fragments/.test(reason)) return 'non_article_page';
   if (/^title too short/.test(reason)) return 'bad_title';
@@ -224,6 +227,35 @@ export function classifyRejectReason(reason: string): string {
   if (/^excerpt too short/.test(reason)) return 'insufficient_content';
   if (/mostly junk phrase/.test(reason)) return 'insufficient_content';
   return 'other_quality';
+}
+
+/** One run's funnel, written into scrape_logs.error_message so the coverage audit
+ *  can tell a healthy source with nothing new from a scraper that sees nothing.
+ *    seen       — article links/items the source showed this run (listing links
+ *                 for html/sitemap sources, feed items for RSS / WP REST)
+ *    known      — of those, already in the DB
+ *    candidates — new items that reached the quality/date gates
+ *    filtered   — candidates dropped by a gate or a failed insert
+ *    inserted   — new rows written
+ *    deferred   — new links left for a later run by max_items (omitted when 0)
+ *  The word "reject" is deliberately absent: the audit counts runs whose message
+ *  matches /reject/ as rejection runs. */
+export type RunTally = { seen: number; known: number; candidates: number; filtered: number; inserted: number; deferred?: number };
+export function formatTally(t: RunTally): string {
+  return `tally [seen=${t.seen} known=${t.known} candidates=${t.candidates} filtered=${t.filtered} new=${t.inserted}${t.deferred ? ` deferred=${t.deferred}` : ''}]`;
+}
+export function parseTally(message: string | null | undefined): RunTally | null {
+  const m = (message ?? '').match(/tally \[seen=(\d+) known=(\d+) candidates=(\d+) filtered=(\d+) new=(\d+)(?: deferred=(\d+))?\]/);
+  return m ? { seen: +m[1], known: +m[2], candidates: +m[3], filtered: +m[4], inserted: +m[5], deferred: m[6] ? +m[6] : 0 } : null;
+}
+
+/** Every listing-page URL a source is configured to read (top level, jobs and
+ *  all job_groups). A scraped candidate whose URL is one of these is the index
+ *  page itself, not an article — passed to looksLikeArticle as `listUrls`. */
+export function sourceListUrls(source: Pick<Source, 'scraper_config'>): string[] {
+  const c = (source.scraper_config ?? {}) as HtmlScraperConfig & { job_groups?: HtmlScraperConfig[][] };
+  const all = [c, ...(c.jobs ?? []), ...((c.job_groups ?? []) as HtmlScraperConfig[][]).flat()];
+  return [...new Set(all.map((j) => j?.list_url).filter((u): u is string => !!u))];
 }
 
 /** Small fixed-size bucket accumulator: per-category counts + up to 3 sample
@@ -253,9 +285,10 @@ export async function scrapeSource(source: Source): Promise<ScrapeResult> {
     await sb.from('scrape_logs').update({ ...patch, finished_at: new Date().toISOString() }).eq('id', logId);
   };
 
+  const tally = newListingTally();
   let raws: RawArticle[];
   try {
-    raws = await fetchRaw(source);
+    raws = await fetchRaw(source, tally);
   } catch (err) {
     const blocked =
       err instanceof FetchError && (err.status === 403 || err.status === 429);
@@ -333,6 +366,7 @@ export async function scrapeSource(source: Source): Promise<ScrapeResult> {
   // what turns an opaque "180 found / 0 new" into an actionable "9 missing_date
   // (+ example URLs)" in both the run log and the daily coverage audit.
   const rejectAudit = newRejectAudit();
+  const listUrls = sourceListUrls(source);
 
   // require_date is now ON BY DEFAULT for every source. Articles whose
   // published_at couldn't be resolved float to the top under created_at
@@ -352,7 +386,7 @@ export async function scrapeSource(source: Source): Promise<ScrapeResult> {
     // Quality gate: reject CTA / aggregator / nav-landing pages before they
     // get inserted. The scraper's CSS selectors capture too much on some
     // sources (ABS "Rules and Guides", LR "Stay alert" sign-up, etc.).
-    const verdict = looksLikeArticle({ title: raw.title, excerpt: raw.excerpt, url: raw.url });
+    const verdict = looksLikeArticle({ title: raw.title, excerpt: raw.excerpt, url: raw.url, listUrls });
     if (!verdict.ok) {
       rejectedQuality++;
       addReject(rejectAudit, classifyRejectReason(verdict.reason), raw.url);
@@ -606,7 +640,17 @@ export async function scrapeSource(source: Source): Promise<ScrapeResult> {
     status,
     articles_found: raws.length,
     articles_new: inserted,
-    error_message: errorParts.length ? errorParts.join('; ') : null,
+    // The tally is appended on EVERY completed run (also clean ones), so this
+    // field is no longer null on success. Readers: the coverage audit (parses it)
+    // and the dormant v1 admin log pages (display only).
+    error_message: [...errorParts, formatTally({
+      seen: tally.listed + (raws.length - tally.fetched),
+      known: tally.known + duplicates,
+      candidates: fresh.length,
+      filtered: rejectTotal,
+      inserted,
+      deferred: tally.deferred,
+    })].join('; '),
     // Reaching here means the fetch succeeded (403/429/5xx throw FetchError and are
     // handled in the catch). Record 200 on success too — not just on failure — so the
     // audit can later tell a 200-empty (0 found but reachable) from a block. Start

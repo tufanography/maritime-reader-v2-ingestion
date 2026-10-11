@@ -661,6 +661,19 @@ export function inheritJobConfig(parent: HtmlScraperConfig, job: HtmlScraperConf
   return jobCfg;
 }
 
+/** What a listing scan SAW, independent of what it returns. fetchHtmlSource drops
+ *  links whose url_hash is already in the DB before the (slow) detail fetch, so
+ *  its return value alone cannot tell "the listing is full but nothing is new"
+ *  from "the listing yielded no links at all" — both come back empty. MEASURED
+ *  2026-10-11: six healthy, fully caught-up sources and one genuinely broken one
+ *  (London P&I, selector matches nothing) all logged `found 0`.
+ *    listed   — article links the listing page(s) produced
+ *    known    — of those, already held (skipped before the detail fetch)
+ *    deferred — new links left for a later run by max_items
+ *    fetched  — rows the listing path actually returned (after detail fetches) */
+export type ListingTally = { listed: number; known: number; deferred: number; fetched: number };
+export const newListingTally = (): ListingTally => ({ listed: 0, known: 0, deferred: 0, fetched: 0 });
+
 export async function fetchHtmlSource(args: {
   config: HtmlScraperConfig;
   delayMs: number;
@@ -673,8 +686,10 @@ export async function fetchHtmlSource(args: {
   /** Source display name, used to pick the per-publisher title parser in
    *  pdf-title-recover (Panama / American / London / Steamship layouts). */
   sourceName?: string;
+  /** Optional counters the caller wants filled in (see ListingTally). */
+  tally?: ListingTally;
 }): Promise<RawArticle[]> {
-  const { config, delayMs, knownUrls, sourceName } = args;
+  const { config, delayMs, knownUrls, sourceName, tally } = args;
 
   // Multi-job branch: a single source can run several scraper configurations
   // (e.g. ABS = newsroom cards + monthly PDFs + rules PDFs). Each job runs
@@ -701,7 +716,7 @@ export async function fetchHtmlSource(args: {
         // Only inherited when the job does NOT define its own value, exactly like
         // exclude_selector — a job-specific override always wins.
         const jobCfg = inheritJobConfig(config, job);
-        const out = await fetchHtmlSource({ config: jobCfg, delayMs, knownUrls, sourceName });
+        const out = await fetchHtmlSource({ config: jobCfg, delayMs, knownUrls, sourceName, tally });
         all.push(...out);
       } catch (err) {
         // One bad job shouldn't kill the rest. Log and continue.
@@ -772,6 +787,7 @@ export async function fetchHtmlSource(args: {
       });
     });
     const max = config.max_items ?? 25;
+    if (tally) tally.listed += out.length;
     return out.slice(0, max);
   }
 
@@ -892,6 +908,11 @@ export async function fetchHtmlSource(args: {
     : items;
   const max = config.max_items ?? 15;
   const targets = filteredItems.slice(0, max);
+  if (tally) {
+    tally.listed += items.length;
+    tally.known += items.length - filteredItems.length;
+    tally.deferred += filteredItems.length - targets.length;
+  }
 
   const out: RawArticle[] = [];
   const visited = new Set<string>(seen);

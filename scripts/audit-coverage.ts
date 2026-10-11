@@ -14,7 +14,7 @@
 // Read-only. Run: npx tsx scripts/audit-coverage.ts [--only=Gard,Splash247]
 import 'dotenv/config';
 import { readFileSync } from 'node:fs';
-import { fetchRaw } from '../lib/scrapers/orchestrator';
+import { fetchRaw, parseTally } from '../lib/scrapers/orchestrator';
 import { hashUrl } from '../lib/scrapers/util';
 import type { Source } from '../lib/supabase/types';
 
@@ -123,7 +123,9 @@ export async function runAudit(topNames: string[]) {
     }
     const errStreak = logs.length >= 3 && logs.slice(0, 3).every((l: any) => l.status === 'error');
     const foundCollapse = noRecentCapture && med >= FOUND_BASELINE_MIN && latest2.length >= 2 && latest2.every((f: number) => f < Math.max(2, med * 0.3));
-    const silent = noRecentCapture && med === 0 && founds.length >= 4;
+    // `seen` (what the source SHOWED), not `found` (what was new): a caught-up
+    // source shows links every run and must not read as silent.
+    const silent = noRecentCapture && median(liveness(logs, false).seens) === 0 && founds.length >= 4;
 
     // SILENT_DEATH — N=10 consecutive found=0 runs on a source that HAS produced
     // before (peak_found). Threshold DERIVED from measured self-recovery series
@@ -134,8 +136,7 @@ export async function runAudit(topNames: string[]) {
     // still fires on sources with no reliable published_at baseline (the exact case
     // American P&I's 39-day PDF death fell into). N will be tightened once the
     // Shipowners/Black Sea series get a git-check (they may also be repairs → lower floor).
-    const zeroStreak = (() => { let n = 0; for (const f of founds) { if (f === 0) n++; else break; } return n; })();
-    const silentDeath = src.peak_found === true && zeroStreak >= 10;
+    const { zeroStreak, silentDeath } = liveness(logs, src.peak_found === true);
 
     // SIGNAL 2 — coverage gap. Run the REAL production extraction (so no
     // divergence on rss/sitemap/requires_js), then do the DB-presence check
@@ -272,6 +273,19 @@ export function readDateIntegrity(
     return { name, flags: ['DATE_INTEGRITY'], note: `${n} visible article(s) dated at scrape-time (scraper_default='now()' fallback — old items surface as fresh).${by ? ' by source: ' + by : ''}` };
   }
   return { name, flags: ['DATE_INTEGRITY_UNKNOWN'], note: `⚠ date-integrity check did NOT complete cleanly (exit=${exit ?? 'missing'}, count=${n ?? 'unparsed'}) — result UNKNOWN; NOT treated as clean, any existing date alarm stays open` };
+}
+
+/** Is the source showing us anything at all? Uses the per-run tally the scraper
+ *  writes ("tally [seen=…]"): `seen` counts every link/item the source showed,
+ *  whether or not it was new. `articles_found` cannot answer this for listing
+ *  sources — already-held links are dropped before it is counted, so a healthy
+ *  caught-up source and a scraper whose selector matches nothing both log 0.
+ *  Runs logged before the tally existed fall back to `articles_found` (the old
+ *  behaviour), so nothing changes retroactively. Logs are newest-first. */
+export function liveness(logs: { articles_found?: number | null; error_message?: string | null }[], peakFound: boolean): { seens: number[]; zeroStreak: number; silentDeath: boolean } {
+  const seens = logs.map((l) => parseTally(l.error_message)?.seen ?? l.articles_found ?? 0);
+  let zeroStreak = 0; for (const s of seens) { if (s === 0) zeroStreak++; else break; }
+  return { seens, zeroStreak, silentDeath: peakFound && zeroStreak >= 10 };
 }
 
 // CRITICAL = a source broke / site is stale (emails on it); the rest are coverage FYIs.
