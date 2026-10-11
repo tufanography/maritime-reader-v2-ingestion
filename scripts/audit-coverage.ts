@@ -125,7 +125,7 @@ export async function runAudit(topNames: string[]) {
     const foundCollapse = noRecentCapture && med >= FOUND_BASELINE_MIN && latest2.length >= 2 && latest2.every((f: number) => f < Math.max(2, med * 0.3));
     // `seen` (what the source SHOWED), not `found` (what was new): a caught-up
     // source shows links every run and must not read as silent.
-    const silent = noRecentCapture && median(liveness(logs, false).seens) === 0 && founds.length >= 4;
+    const silent = noRecentCapture && median(liveness(talliedOrAll(logs), false).seens) === 0 && founds.length >= 4;
 
     // SILENT_DEATH — N=10 consecutive found=0 runs on a source that HAS produced
     // before (peak_found). Threshold DERIVED from measured self-recovery series
@@ -286,6 +286,15 @@ export function liveness(logs: { articles_found?: number | null; error_message?:
   const seens = logs.map((l) => parseTally(l.error_message)?.seen ?? l.articles_found ?? 0);
   let zeroStreak = 0; for (const s of seens) { if (s === 0) zeroStreak++; else break; }
   return { seens, zeroStreak, silentDeath: peakFound && zeroStreak >= 10 };
+}
+
+/** Runs that carry a tally are authoritative about what the source showed; older
+ *  runs only know `found`. Once any tally exists, judge on those runs alone — a
+ *  median over 20 logs would otherwise keep a healthy daily source SILENT for ~10
+ *  more days on its pre-tally zeros. No tally yet → all logs (old behaviour). */
+export function talliedOrAll<T extends { error_message?: string | null }>(logs: T[]): T[] {
+  const t = logs.filter((l) => parseTally(l.error_message));
+  return t.length ? t : logs;
 }
 
 // CRITICAL = a source broke / site is stale (emails on it); the rest are coverage FYIs.

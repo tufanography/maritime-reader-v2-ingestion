@@ -2,7 +2,7 @@
 // source with nothing new must look DIFFERENT from a scraper that sees nothing.
 // Run: npx tsx lib/scrapers/__tests__/tally.test.ts
 import { formatTally, parseTally } from '../orchestrator';
-import { liveness } from '../../../scripts/audit-coverage';
+import { liveness, talliedOrAll } from '../../../scripts/audit-coverage';
 
 let pass = 0;
 const failures: string[] = [];
@@ -42,6 +42,11 @@ check('never-proven source can never alarm', liveness(broken, false).silentDeath
 check('under 10 empty runs is not death yet', liveness(broken.slice(0, 9), true).silentDeath, false);
 check('an error run without a tally counts as seeing nothing', liveness([{ articles_found: 0, error_message: 'HTTP 403 (403 forbidden) — Status code 403' }], true).zeroStreak, 1);
 check('seens exposes what each run saw', liveness([healthyIdle[0], broken[0], run(3)], true).seens, [10, 0, 3]);
+
+// ── SILENT input: tallied runs win over pre-tally zeros ─────────────────────
+check('one tallied run outweighs 19 legacy zeros', talliedOrAll([healthyIdle[0], ...legacy]).length, 1);
+check('no tally yet → all logs, unchanged', talliedOrAll(legacy).length, 12);
+check('a tallied seen=0 run still reads as seeing nothing', liveness(talliedOrAll([broken[0], ...legacy]), false).seens, [0]);
 
 console.log(`${pass} test gecti, ${failures.length} basarisiz`);
 if (failures.length) { console.log('\nBASARISIZ:\n' + failures.join('\n\n')); process.exit(1); }
