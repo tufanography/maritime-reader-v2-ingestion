@@ -38,7 +38,8 @@ check('CMA CGM launches new service', null, 'The rotation avoids Suez because of
 check('Class society appoints head of detention review', null);
 check('Singapore Ship Registry Marks 60 Years, Plans Digital Upgrade', null);
 check('Shipowner wins award in demurrage arbitration', null);
-check('ONE revises Red Sea service coverage', null);   // trade-route security, not a routine rotation
+check('ONE revises Red Sea service coverage', null);
+check('Maersk launches VGM service at Milazzo', null);   // SOLAS verified gross mass   // trade-route security, not a routine rotation
 
 // ── ordinary in-scope news is never touched ─────────────────────────────────
 for (const t of [

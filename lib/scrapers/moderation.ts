@@ -147,7 +147,7 @@ const IN_SCOPE_SIGNAL = new RegExp('\\b(' + [
   'strikes?', 'walkout', 'congestion', 'closure', 'closed', 'shut ?down', 'suspend\\w*', 'halt\\w*', 'divert\\w*', 'reroute\\w*', 'draft restriction\\w*', 'delays?', 'disrupt\\w*', 'blockade',
   'pira\\w+', 'hijack\\w*', 'attack\\w*', 'houthi\\w*', 'missile\\w*', 'drone\\w*', 'war risks?', 'seiz\\w*', 'arrest\\w*', 'boarded', 'armed robbery', 'security alert',
   'court', 'arbitration', 'tribunal', 'judge?ment', 'lawsuit', 'sues?', 'sued', 'claims?', 'demurrage', 'off-?hire', 'charterparty', 'liabilit\\w*', 'dispute\\w*',
-  'pollution', 'spill\\w*', 'emission\\w*', 'abandon\\w*', 'seafarer\\w*', 'crew', 'stowaway\\w*', 'cargo damage', 'liquefaction', 'imsbc', 'imdg', 'dangerous goods',
+  'pollution', 'spill\\w*', 'emission\\w*', 'abandon\\w*', 'seafarer\\w*', 'crew', 'stowaway\\w*', 'cargo damage', 'liquefaction', 'imsbc', 'imdg', 'dangerous goods', 'vgm', 'verified gross mass',
   'container loss', 'overboard', 'recall', 'defect\\w*', 'bankrupt\\w*', 'insolven\\w*', 'tariffs?', 'port fees?', 'surcharge\\w*', 'rate hike', 'gri', 'registry', 'flag state',
   'red sea', 'suez', 'hormuz', 'bab[- ]el[- ]mandeb', 'black sea', 'gulf of aden', 'strait', 'canal',
 ].join('|') + ')\\b', 'i');
