@@ -507,9 +507,7 @@ export async function scrapeSource(source: Source): Promise<ScrapeResult> {
       // Publishing policy: routine company items from news outlets are stored but
       // not shown. Only reached for aggregators — P&I, regulator, PSC, class and
       // legal sources are 'trusted' and never pass through this check.
-      const outOfScope = outOfEditorialScope(raw.title, raw.excerpt);
-      if (outOfScope) outOfScopeHidden++;
-      contentQuality = outOfScope ? 'hidden' : 'pending';
+      contentQuality = outOfEditorialScope(raw.title, raw.excerpt) ? 'hidden' : 'pending';
     } else {
       contentQuality = 'visible';
     }
@@ -566,6 +564,7 @@ export async function scrapeSource(source: Source): Promise<ScrapeResult> {
     }
     if (!insertErr && insertedRow) {
       inserted++;
+      if (contentQuality === 'hidden' && modVerdict.decision !== 'hide') outOfScopeHidden++;
       // Tag the new article. Failures here are non-fatal.
       try {
         const tagIds = await extractTagIds({ sb, title: raw.title, excerpt: raw.excerpt, url: raw.url });

@@ -28,7 +28,7 @@ import { categorizeByRules, extractSummary } from '../lib/ai/rules';
 import { deriveDocumentType } from '../lib/v3/document-type';
 import { deriveSegments } from '../lib/v3/segments';
 import { extractKeywords } from '../lib/tagging/keywords';
-import { moderate } from '../lib/scrapers/moderation';
+import { moderate, outOfEditorialScope } from '../lib/scrapers/moderation';
 import { extractTagIds } from '../lib/tagging/extract';
 import { isProperNounOrAcronym } from '../lib/tagging/gate';
 import type { Source } from '../lib/supabase/types';
@@ -133,7 +133,11 @@ for (let page = 1; page <= 200; page++) {
     const segments = deriveSegments({ categorySlug: rules.category, title: ra.title, excerpt: ra.excerpt, sourceName: source.name });
     const keywords = extractKeywords({ title: ra.title, excerpt: ra.excerpt }, 5);
     const mod = moderate(ra.title, ra.excerpt);
-    const contentQuality = mod.decision === 'hide' ? 'hidden' : source.trust_level === 'aggregator' ? 'pending' : 'visible';
+    // Same visibility rule as the live scrape (orchestrator): spam hidden, and for
+    // news outlets routine company items are stored but not shown.
+    const contentQuality = mod.decision === 'hide' ? 'hidden'
+      : source.trust_level !== 'aggregator' ? 'visible'
+      : outOfEditorialScope(ra.title, ra.excerpt) ? 'hidden' : 'pending';
     const { data: row, error } = await sb.from('articles').insert({
       source_id: source.id,
       category_id: categoryId,

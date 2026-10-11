@@ -40,6 +40,10 @@ check('Singapore Ship Registry Marks 60 Years, Plans Digital Upgrade', null);
 check('Shipowner wins award in demurrage arbitration', null);
 check('ONE revises Red Sea service coverage', null);   // trade-route security, not a routine rotation
 check('Maersk launches VGM service at Milazzo', null);   // SOLAS verified gross mass
+check('Swire Shipping revises Australian port service charges', null);   // port costs
+// the signal is read from the lead only: a word deep in a long body does not rescue a routine item
+check('Port of Oakland Appoints Carl Cade as Chief Real Estate Officer', 'personnel', 'The Port of Oakland has appointed Carl Cade. '.repeat(12) + 'An unrelated fire was mentioned.');
+check('Port of Oakland Appoints Carl Cade as Chief Real Estate Officer', null, 'Appointed after the fatal fire at the terminal.');
 
 // ── ordinary in-scope news is never touched ─────────────────────────────────
 for (const t of [

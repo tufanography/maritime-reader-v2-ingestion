@@ -148,7 +148,7 @@ const IN_SCOPE_SIGNAL = new RegExp('\\b(' + [
   'pira\\w+', 'hijack\\w*', 'attack\\w*', 'houthi\\w*', 'missile\\w*', 'drone\\w*', 'war risks?', 'seiz\\w*', 'arrest\\w*', 'boarded', 'armed robbery', 'security alert',
   'court', 'arbitration', 'tribunal', 'judge?ment', 'lawsuit', 'sues?', 'sued', 'claims?', 'demurrage', 'off-?hire', 'charterparty', 'liabilit\\w*', 'dispute\\w*',
   'pollution', 'spill\\w*', 'emission\\w*', 'abandon\\w*', 'seafarer\\w*', 'crew', 'stowaway\\w*', 'cargo damage', 'liquefaction', 'imsbc', 'imdg', 'dangerous goods', 'vgm', 'verified gross mass',
-  'container loss', 'overboard', 'recall', 'defect\\w*', 'bankrupt\\w*', 'insolven\\w*', 'tariffs?', 'port fees?', 'surcharge\\w*', 'rate hike', 'gri', 'registry', 'flag state',
+  'container loss', 'overboard', 'recall', 'defect\\w*', 'bankrupt\\w*', 'insolven\\w*', 'tariffs?', 'port fees?', 'surcharge\\w*', 'charges?', 'rate hike', 'gri', 'registry', 'flag state',
   'red sea', 'suez', 'hormuz', 'bab[- ]el[- ]mandeb', 'black sea', 'gulf of aden', 'strait', 'canal',
 ].join('|') + ')\\b', 'i');
 
@@ -167,7 +167,9 @@ const ROUTINE_COMPANY_TITLE: { kind: string; re: RegExp }[] = [
 /** Routine company item from a general news outlet → out of editorial scope.
  *  Returns the matched kind, or null when the item stays. */
 export function outOfEditorialScope(title: string, excerpt: string): string | null {
-  if (IN_SCOPE_SIGNAL.test(title) || IN_SCOPE_SIGNAL.test(excerpt)) return null;
+  // Lead only: a 2,000-character body almost always contains SOME signal word in
+  // passing (measured 2026-10-12: a minor appointment stayed visible that way).
+  if (IN_SCOPE_SIGNAL.test(title) || IN_SCOPE_SIGNAL.test(excerpt.slice(0, 400))) return null;
   for (const p of ROUTINE_COMPANY_TITLE) {
     if (p.re.test(title) && !(p.kind === 'personnel' && TOP_JOB.test(title))) return p.kind;
   }
