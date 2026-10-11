@@ -9,7 +9,7 @@ import { fetchHtmlSource, FetchError, newListingTally, type HtmlScraperConfig, t
 import { formatFetchError, parseStatusFromError } from './fetch-health';
 import { hashUrl, sleep } from './util';
 import { looksLikeArticle } from './quality';
-import { moderate } from './moderation';
+import { moderate, outOfEditorialScope } from './moderation';
 import { resolveFallbackDate } from './date-fallback';
 import { extractTagIds } from '../tagging/extract';
 import { extractKeywords } from '../tagging/keywords';
@@ -362,6 +362,7 @@ export async function scrapeSource(source: Source): Promise<ScrapeResult> {
   let rejectedQuality = 0;
   let rejectedNoDate = 0;
   let insertFailed = 0;
+  let outOfScopeHidden = 0;
   // Machine-readable per-category breakdown + up to 3 sample URLs each. This is
   // what turns an opaque "180 found / 0 new" into an actionable "9 missing_date
   // (+ example URLs)" in both the run log and the daily coverage audit.
@@ -503,7 +504,12 @@ export async function scrapeSource(source: Source): Promise<ScrapeResult> {
     if (modVerdict.decision === 'hide') {
       contentQuality = 'hidden';
     } else if (source.trust_level === 'aggregator') {
-      contentQuality = 'pending';
+      // Publishing policy: routine company items from news outlets are stored but
+      // not shown. Only reached for aggregators — P&I, regulator, PSC, class and
+      // legal sources are 'trusted' and never pass through this check.
+      const outOfScope = outOfEditorialScope(raw.title, raw.excerpt);
+      if (outOfScope) outOfScopeHidden++;
+      contentQuality = outOfScope ? 'hidden' : 'pending';
     } else {
       contentQuality = 'visible';
     }
@@ -595,6 +601,7 @@ export async function scrapeSource(source: Source): Promise<ScrapeResult> {
   if (rejectedQuality > 0) errorParts.push(`${rejectedQuality} rejected by quality filter`);
   if (rejectedNoDate > 0) errorParts.push(`${rejectedNoDate} rejected: no usable date`);
   if (insertFailed > 0) errorParts.push(`${insertFailed} insert failures`);
+  if (outOfScopeHidden > 0) errorParts.push(`${outOfScopeHidden} hidden: outside editorial scope`);
 
   // ACCOUNTING INVARIANT.
   // Every item fetched must end up in exactly one bucket: inserted, already
