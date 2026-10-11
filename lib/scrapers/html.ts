@@ -757,8 +757,11 @@ export async function fetchHtmlSource(args: {
       seen.add(url);
 
       const dateText = $card.find(dateSel).first().text().trim();
+      // parseListDate first: timezone-independent (UTC midnight). `new Date(text)`
+      // reads "7 October 2026" in the machine's local zone and can land a day early.
       const parsedDate = dateText ? new Date(dateText) : null;
-      const publishedAt = parsedDate && !isNaN(parsedDate.getTime()) ? parsedDate.toISOString() : null;
+      const publishedAt = parseListDate(dateText)
+        ?? (parsedDate && !isNaN(parsedDate.getTime()) ? parsedDate.toISOString() : null);
 
       const $img = $card.find(imgSel).first();
       const imgSrc = $img.attr('src') ?? null;

@@ -46,6 +46,12 @@ check('candidate that IS the listing page rejected (Skuld /topics/)', why('TOPIC
 check('listing page rejected whatever its title (UK P&I)', why('Knowledge and resources for Members', 'https://www.ukpandi.com/news-and-resources/?page=1', ['https://www.ukpandi.com/news-and-resources/']), 'url is a listing page of this source');
 check('an article UNDER the listing path is not the listing', ok('Bulletin: stowaway risks in West Africa', 'https://www.ukpandi.com/news-and-resources/bulletins/stowaway-risks/', ['https://www.ukpandi.com/news-and-resources/']), true);
 check('login shell still a login_wall', why('Login - Japan P&I Club'), 'login_wall');
+// Real page London P&I served instead of an article (2026-10-11)
+check('bot-challenge page is never an article',
+  looksLikeArticle({ title: 'Just a moment...', excerpt: 'www.londonpandi.com Performing security verification This website uses a security service to protect against malicious bots. This page is displayed while the website verifies you are not a bot.' + ' x'.repeat(100) }).reason, 'login_wall');
+check('challenge body under a normal title',
+  looksLikeArticle({ title: 'Additional Premium Areas', excerpt: 'Performing security verification. This website uses a security service to protect against malicious bots.' + ' x'.repeat(100) }).reason, 'login_wall');
+check('a real article on port security checks passes', why('Port security checks tightened after Red Sea attacks'), 'ok');
 check('"Press Release" placeholder still rejected', ok('Press Release'), false);
 check('ordinary article unaffected', ok('Fines for excess bunker in Türkiye'), true);
 

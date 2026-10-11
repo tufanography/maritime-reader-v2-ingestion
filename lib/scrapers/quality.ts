@@ -113,11 +113,14 @@ const LOGIN_WALL_TITLE_PATTERNS: RegExp[] = [
   /^(log\s*in|login|sign\s*in)\b/i,
   /^(access\s+denied|forbidden|unauthori[sz]ed|permission\s+denied)\b/i,
   /^(403\b|404\b|error\s*40\d|page\s+not\s+found|not\s+found)\b/i,
+  // Bot-challenge interstitials (Cloudflare etc.) served instead of the article.
+  /^(just a moment|attention required|checking your browser|verify(ing)? you are human|security check)\b/i,
 ];
 const LOGIN_WALL_BODY_PATTERNS: RegExp[] = [
   /\bplease\s+(log\s*in|sign\s*in)\s+to\s+(view|access|read|continue|see)\b/i,
   /\byou\s+(do\s+not|don'?t)\s+have\s+permission\s+to\s+(view|access)\b/i,
   /\b(enter\s+your\s+)?(username|user\s*id|email)\b.{0,40}\bpassword\b/i,
+  /\bperforming security verification\b|\bsecurity service to protect (itself |against )/i,
 ];
 
 /** True when a scraped page is a login / access-denied shell rather than the
