@@ -23,7 +23,10 @@ if ($last -and ((Get-Date) - $last).TotalDays -gt 4) {
 
 $out = & npx tsx scripts/cron-scrape.ts --runner=local 2>&1
 $code = $LASTEXITCODE
-$out | Where-Object { $_ -match 'scrapeAllDue|Done in|error|failed|403|HTTP' } | ForEach-Object { Say "  $_" }
-if ($code -ne 0) { Say "FAILED: scrape exit code $code"; exit $code }
-(Get-Date).ToString('o') | Out-File -FilePath $stamp -Encoding ascii
+$out | Where-Object { "$_" -match 'scrapeAllDue|Done in|^\s*\[(success|empty|error)\]|Missing|ENOTFOUND|fetch failed' } | ForEach-Object { Say "  $_" }
+if ($code -ne 0) { Say "FAILED: scrape exit code $code - $(("$($out | Select-Object -Last 3)") -replace '\s+', ' ')"; exit $code }
+# cron-scrape exits 0 even when a source fails (it logs the failure and moves on),
+# so read the per-source result lines: only a clean run advances the catch-up stamp.
+if ($out | Where-Object { "$_" -match '^\s*\[error\]' }) { Say 'FAILED: a source returned an error (see the [error] line above); will retry next run'; exit 2 }
+if ($out | Where-Object { "$_" -match '^\s*\[(success|empty)\]' }) { (Get-Date).ToString('o') | Out-File -FilePath $stamp -Encoding ascii }
 Say 'OK'
