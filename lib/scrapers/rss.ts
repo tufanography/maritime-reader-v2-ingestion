@@ -216,6 +216,9 @@ export type RawArticle = {
   content_terms?: string[];
   text_source?: 'content' | 'excerpt' | 'none';
   gate_reason?: string;
+  /** Found only by the WP REST window (missed by the regular feed / newest-N
+   *  read): stored hidden until a publishing rule is approved for the source. */
+  hold_hidden?: boolean;
 };
 
 const OG_IMAGE_TIMEOUT_MS = 8000;
@@ -404,13 +407,43 @@ function decodeEntities(s: string): string {
  *  dedup keeps the richer primary copy and lets REST fill in what the stale feed missed.
  *  `date_gmt` is the UTC publish time. Best-effort: throws on non-200 / non-JSON so the
  *  caller can log-and-continue without killing the primary results. */
-export async function fetchWpRest(baseUrl: string, opts: { perPage?: number } = {}): Promise<RawArticle[]> {
+export async function fetchWpRest(
+  baseUrl: string,
+  opts: { perPage?: number; afterIso?: string; maxPages?: number; onPageCap?: (unread: number) => void } = {},
+): Promise<RawArticle[]> {
+  // Window mode: every post published after `afterIso`, all pages. A fixed "newest N"
+  // loses posts when a source publishes in bursts (Hellenic: 375 of 482 missed posts
+  // in 14 days went out in the 21:00 UTC batch while each run read the newest 20).
+  if (opts.afterIso) {
+    const sep = baseUrl.includes('?') ? '&' : '?';
+    const out: RawArticle[] = [];
+    const maxPages = opts.maxPages ?? 30;
+    for (let page = 1, total = 1; page <= total; page++) {
+      if (page > maxPages) { opts.onPageCap?.(total - maxPages); break; }
+      const res = await fetchWpPage(`${baseUrl}${sep}after=${encodeURIComponent(opts.afterIso)}&per_page=100&page=${page}&orderby=date&order=desc&_fields=link,date_gmt,title,excerpt,content`);
+      total = Number(res.totalPages) || 1;
+      for (const p of res.posts) { const ra = wpPostToRawArticle(p); if (ra) out.push(ra); }
+      if (page < total) await sleep(1_500);
+    }
+    return out;
+  }
   const per = Math.min(Math.max(opts.perPage ?? 20, 1), 100);
   const sep = baseUrl.includes('?') ? '&' : '?';
   // STEP 3: request `content` too. It is used IN MEMORY only (gated → extractor →
   // content_terms); it is never stored. excerpt.rendered remains the ONLY source
   // of raw_excerpt.
   const url = `${baseUrl}${sep}per_page=${per}&orderby=date&_fields=link,date_gmt,title,excerpt,content`;
+  const { posts } = await fetchWpPage(url);
+  const out: RawArticle[] = [];
+  for (const p of posts) {
+    const ra = wpPostToRawArticle(p);
+    if (ra) out.push(ra);
+  }
+  return out;
+}
+
+/** One WP REST page with the shared retry policy. Throws on non-200 / non-JSON. */
+async function fetchWpPage(url: string): Promise<{ posts: any[]; totalPages: string | null }> {
   const doFetch = async (): Promise<Response> => {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 25_000);
@@ -435,13 +468,7 @@ export async function fetchWpRest(baseUrl: string, opts: { perPage?: number } = 
   if (!res.ok) throw new Error(`Status code ${res.status}`);
   let posts: unknown;
   try { posts = JSON.parse(await res.text()); } catch { throw new Error('WP REST returned non-JSON'); }
-  if (!Array.isArray(posts)) return [];
-  const out: RawArticle[] = [];
-  for (const p of posts as any[]) {
-    const ra = wpPostToRawArticle(p);
-    if (ra) out.push(ra);
-  }
-  return out;
+  return { posts: Array.isArray(posts) ? posts : [], totalPages: res.headers.get('x-wp-totalpages') };
 }
 
 /** Transform ONE WordPress REST post object into a RawArticle — the single source

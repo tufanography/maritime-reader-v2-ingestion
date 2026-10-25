@@ -73,7 +73,7 @@ function selectActiveConfig(source: Source): HtmlScraperConfig {
 // rather than re-implementing it — a re-implementation diverged and false-flagged
 // healthy sitemap/RSS sources (Gard) as broken. Read-only; no insert side effects.
 export async function fetchRaw(source: Source, tally?: ListingTally): Promise<RawArticle[]> {
-  const rawCfg = (source.scraper_config ?? {}) as HtmlScraperConfig & { skip_og_image?: boolean; wp_rest_url?: string; wp_rest_urls?: string[]; wp_rest_per_page?: number };
+  const rawCfg = (source.scraper_config ?? {}) as HtmlScraperConfig & { skip_og_image?: boolean; wp_rest_url?: string; wp_rest_urls?: string[]; wp_rest_per_page?: number; wp_rest_window_hours?: number };
   const all: RawArticle[] = [];
 
   if (source.type === 'rss') {
@@ -169,13 +169,63 @@ export async function fetchRaw(source: Source, tally?: ListingTally): Promise<Ra
     ...(rawCfg.wp_rest_url ? [rawCfg.wp_rest_url] : []),
     ...(Array.isArray(rawCfg.wp_rest_urls) ? rawCfg.wp_rest_urls : []),
   ];
+  // Window mode (opt-in per source via wp_rest_window_hours): read every post
+  // published since the last successful run minus an overlap, all pages, instead of
+  // the newest N. After an outage the window widens on its own.
+  let afterIso: string | undefined;
+  if (restUrls.length && rawCfg.wp_rest_window_hours) {
+    const { data: ok } = await createServiceClient().from('scrape_logs').select('started_at')
+      .eq('source_id', source.id).in('status', ['success', 'empty'])
+      .order('started_at', { ascending: false }).limit(1);
+    afterIso = wpWindowStart(ok?.[0]?.started_at ?? null, rawCfg.wp_rest_window_hours, new Date());
+  }
   for (const restUrl of restUrls) {
-    try { all.push(...await fetchWpRest(restUrl, { perPage: rawCfg.wp_rest_per_page })); }
+    try {
+      // The regular newest-N read runs exactly as before; its posts keep today's
+      // visibility. The window only ADDS what that read missed, held hidden.
+      all.push(...await fetchWpRest(restUrl, { perPage: rawCfg.wp_rest_per_page }));
+      if (afterIso) {
+        const windowPosts = await fetchWpRest(restUrl, {
+          afterIso,
+          onPageCap: (unread) => {
+            console.error(`WP REST window for ${source.name} hit the page cap: ${unread} page(s) unread`);
+            if (tally) tally.deferred += unread * 100;
+          },
+        });
+        all.push(...windowOnly(all, windowPosts));
+      }
+    }
     // B1: an additive WP REST 403 (Splash247's exact failure) was the flagged
     // "biggest silent failure" — now logged with its classified HTTP code.
     catch (e) { console.error(`WP REST failed for ${source.name}: ${restUrl} — ${formatFetchError(e)}`); }
   }
   return all;
+}
+
+/** Posts found by the WP REST window that the regular read did not return,
+ *  marked hold_hidden. URLs already present are skipped, so the same post is
+ *  never pushed twice in one run. */
+export function windowOnly(existing: RawArticle[], windowPosts: RawArticle[]): RawArticle[] {
+  const seen = new Set(existing.map((r) => hashUrl(r.url)));
+  const out: RawArticle[] = [];
+  for (const r of windowPosts) {
+    const h = hashUrl(r.url);
+    if (seen.has(h)) continue;
+    seen.add(h);
+    out.push({ ...r, hold_hidden: true });
+  }
+  return out;
+}
+
+/** Start of the WP REST read window: `overlapHours` before the last successful run
+ *  (never later than `overlapHours` before now), and never more than `maxDays` back.
+ *  The overlap re-reads recent posts so late-published / re-dated items are not
+ *  missed; known URLs are dropped by the url_hash dedup, so re-reading is safe. */
+export function wpWindowStart(lastOkIso: string | null, overlapHours: number, now: Date, maxDays = 30): string {
+  const h = overlapHours * 36e5;
+  const fromLast = lastOkIso ? Date.parse(lastOkIso) - h : now.getTime() - h;
+  const start = Math.min(fromLast, now.getTime() - h);
+  return new Date(Math.max(start, now.getTime() - maxDays * 864e5)).toISOString();
 }
 
 /** Which of these url_hashes does the DB already hold?
@@ -363,6 +413,7 @@ export async function scrapeSource(source: Source): Promise<ScrapeResult> {
   let rejectedNoDate = 0;
   let insertFailed = 0;
   let outOfScopeHidden = 0;
+  let heldHidden = 0;
   // Machine-readable per-category breakdown + up to 3 sample URLs each. This is
   // what turns an opaque "180 found / 0 new" into an actionable "9 missing_date
   // (+ example URLs)" in both the run log and the daily coverage audit.
@@ -503,6 +554,10 @@ export async function scrapeSource(source: Source): Promise<ScrapeResult> {
     let contentQuality: 'visible' | 'pending' | 'hidden';
     if (modVerdict.decision === 'hide') {
       contentQuality = 'hidden';
+    } else if (raw.hold_hidden) {
+      // Catch-up post the regular read missed: stored, not shown, until the
+      // owner approves a publishing rule for it (re-evaluable later).
+      contentQuality = 'hidden';
     } else if (source.trust_level === 'aggregator') {
       // Publishing policy: routine company items from news outlets are stored but
       // not shown. Only reached for aggregators — P&I, regulator, PSC, class and
@@ -564,7 +619,8 @@ export async function scrapeSource(source: Source): Promise<ScrapeResult> {
     }
     if (!insertErr && insertedRow) {
       inserted++;
-      if (contentQuality === 'hidden' && modVerdict.decision !== 'hide') outOfScopeHidden++;
+      if (raw.hold_hidden && modVerdict.decision !== 'hide') heldHidden++;
+      else if (contentQuality === 'hidden' && modVerdict.decision !== 'hide') outOfScopeHidden++;
       // Tag the new article. Failures here are non-fatal.
       try {
         const tagIds = await extractTagIds({ sb, title: raw.title, excerpt: raw.excerpt, url: raw.url });
@@ -601,6 +657,7 @@ export async function scrapeSource(source: Source): Promise<ScrapeResult> {
   if (rejectedNoDate > 0) errorParts.push(`${rejectedNoDate} rejected: no usable date`);
   if (insertFailed > 0) errorParts.push(`${insertFailed} insert failures`);
   if (outOfScopeHidden > 0) errorParts.push(`${outOfScopeHidden} hidden: outside editorial scope`);
+  if (heldHidden > 0) errorParts.push(`${heldHidden} held hidden: window catch-up`);
 
   // ACCOUNTING INVARIANT.
   // Every item fetched must end up in exactly one bucket: inserted, already
