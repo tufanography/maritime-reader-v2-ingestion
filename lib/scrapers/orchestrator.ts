@@ -414,6 +414,7 @@ export async function scrapeSource(source: Source): Promise<ScrapeResult> {
   let insertFailed = 0;
   let outOfScopeHidden = 0;
   let heldHidden = 0;
+  let thinHidden = 0;
   // Machine-readable per-category breakdown + up to 3 sample URLs each. This is
   // what turns an opaque "180 found / 0 new" into an actionable "9 missing_date
   // (+ example URLs)" in both the run log and the daily coverage audit.
@@ -440,9 +441,19 @@ export async function scrapeSource(source: Source): Promise<ScrapeResult> {
     // sources (ABS "Rules and Guides", LR "Stay alert" sign-up, etc.).
     const verdict = looksLikeArticle({ title: raw.title, excerpt: raw.excerpt, url: raw.url, listUrls });
     if (!verdict.ok) {
-      rejectedQuality++;
-      addReject(rejectAudit, classifyRejectReason(verdict.reason), raw.url);
-      continue;
+      // A WordPress post whose only problem is too little text is still a real
+      // post (title, URL, date from the API): keep it hidden with the reason in the
+      // provenance columns instead of losing it. Everything else is rejected as before.
+      if (raw.wp_post && ctReady && /^excerpt too short/.test(verdict.reason)) {
+        raw.hold_hidden = true;
+        raw.thin_text = true;
+        raw.text_source = 'none';
+        raw.gate_reason = verdict.reason;
+      } else {
+        rejectedQuality++;
+        addReject(rejectAudit, classifyRejectReason(verdict.reason), raw.url);
+        continue;
+      }
     }
     if (!raw.published_at) {
       // Dateless content. Sources that opt in (scraper_config.date_fallback) get
@@ -619,7 +630,8 @@ export async function scrapeSource(source: Source): Promise<ScrapeResult> {
     }
     if (!insertErr && insertedRow) {
       inserted++;
-      if (raw.hold_hidden && modVerdict.decision !== 'hide') heldHidden++;
+      if (raw.thin_text) thinHidden++;
+      else if (raw.hold_hidden && modVerdict.decision !== 'hide') heldHidden++;
       else if (contentQuality === 'hidden' && modVerdict.decision !== 'hide') outOfScopeHidden++;
       // Tag the new article. Failures here are non-fatal.
       try {
@@ -657,7 +669,8 @@ export async function scrapeSource(source: Source): Promise<ScrapeResult> {
   if (rejectedNoDate > 0) errorParts.push(`${rejectedNoDate} rejected: no usable date`);
   if (insertFailed > 0) errorParts.push(`${insertFailed} insert failures`);
   if (outOfScopeHidden > 0) errorParts.push(`${outOfScopeHidden} hidden: outside editorial scope`);
-  if (heldHidden > 0) errorParts.push(`${heldHidden} held hidden: window catch-up`);
+  if (heldHidden > 0) errorParts.push(`${heldHidden} held hidden: window catch-up or relaxed excerpt rule`);
+  if (thinHidden > 0) errorParts.push(`${thinHidden} stored hidden: too little text`);
 
   // ACCOUNTING INVARIANT.
   // Every item fetched must end up in exactly one bucket: inserted, already

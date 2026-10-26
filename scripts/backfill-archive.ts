@@ -135,7 +135,7 @@ for (let page = 1; page <= 200; page++) {
     const mod = moderate(ra.title, ra.excerpt);
     // Same visibility rule as the live scrape (orchestrator): spam hidden, and for
     // news outlets routine company items are stored but not shown.
-    const contentQuality = mod.decision === 'hide' ? 'hidden'
+    const contentQuality = mod.decision === 'hide' || ra.hold_hidden ? 'hidden'
       : source.trust_level !== 'aggregator' ? 'visible'
       : outOfEditorialScope(ra.title, ra.excerpt) ? 'hidden' : 'pending';
     const { data: row, error } = await sb.from('articles').insert({

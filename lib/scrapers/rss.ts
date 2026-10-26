@@ -217,8 +217,14 @@ export type RawArticle = {
   text_source?: 'content' | 'excerpt' | 'none';
   gate_reason?: string;
   /** Found only by the WP REST window (missed by the regular feed / newest-N
-   *  read): stored hidden until a publishing rule is approved for the source. */
+   *  read), or accepted only because the excerpt rule was relaxed: stored hidden
+   *  until a publishing decision is made. */
   hold_hidden?: boolean;
+  /** Came from the WordPress REST API, so it is certainly a post (not a menu or
+   *  listing page): a post with too little text is stored hidden, not dropped. */
+  wp_post?: boolean;
+  /** Stored hidden because its text is too short (set by the scraper). */
+  thin_text?: boolean;
 };
 
 const OG_IMAGE_TIMEOUT_MS = 8000;
@@ -493,7 +499,16 @@ export function wpPostToRawArticle(p: any): RawArticle | null {
   // ABSENT (not merely boilerplate), fall back to the article's own GATED content for
   // a teaser; if the excerpt exists but fails the gate, still store EMPTY (don't
   // publish boilerplate). Sources that ship a real excerpt (posts) are unaffected.
-  const rawExcerpt = gateText(title, excerptText).ok
+  //
+  // A publisher excerpt that only fails the title-overlap test is KEPT: sharing no
+  // word with the title is not boilerplate ("CLARKSONS HELLAS – SnP WEEKLY" /
+  // "In the tanker space, ..."). Measured 2026-10-26 on 30 days of every WP source:
+  // 149 posts rejected only for that, 0 ads/menus/boilerplate among them. Posts
+  // accepted ONLY because of this are held hidden: passing the quality check is not
+  // a publishing decision.
+  const g = gateText(title, excerptText);
+  const titleOverlapOnly = !g.ok && g.reason === 'no-title-overlap';
+  const rawExcerpt = g.ok || titleOverlapOnly
     ? excerptText.slice(0, 500)
     : (!excerptText && gateText(title, contentText).ok ? contentText.slice(0, 500) : '');
   return {
@@ -508,5 +523,7 @@ export function wpPostToRawArticle(p: any): RawArticle | null {
     content_terms: sel.content_terms,
     text_source: sel.text_source,
     gate_reason: sel.gate_reason,
+    wp_post: true,
+    ...(titleOverlapOnly ? { hold_hidden: true } : {}),
   };
 }
